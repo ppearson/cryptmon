@@ -50,12 +50,18 @@ impl Config {
                              display_coins: Vec::with_capacity(0), coin_name_ignore_items: BTreeMap::new(),
                              display_update_period: 120, display_data_view_type: DisplayDataViewType::MediumData };
 
-        config.load_config_file();
+        if !config.load_config_file() {
+            // we didn't find a config file, so add some currency symbols as the default so we at least load something by default...
+            config.display_coins.push("BTC".to_string());
+            config.display_coins.push("ETH".to_string());
+            config.display_coins.push("BTC".to_string());
+            config.display_coins.push("LTC".to_string());
+        }
 
         return config;
     }
 
-    fn load_config_file(&mut self) {
+    fn load_config_file(&mut self) -> bool {
 
         // TODO: would be nice to condense this a bit...
         let mut config_path = String::new();
@@ -97,7 +103,7 @@ impl Config {
         let file = std::fs::File::open(config_path);
         if file.is_err() {
             eprintln!("Warning: Can't find a cryptmon.ini file for config, so using default configuration...");
-            return;
+            return false;
         }
 
         let reader = BufReader::new(file.unwrap());
@@ -154,6 +160,8 @@ impl Config {
                 eprintln!("Error: malformed line in cryptmon.ini, will be ignored.");
             }
         }
+
+        return true;
     }
 }
 
