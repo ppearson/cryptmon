@@ -16,6 +16,7 @@
 mod config;
 mod price_provider;
 mod price_provider_coingecko;
+mod price_provider_coinmarketcap;
 mod price_provider_cryptocompare;
 mod cli_table_printer;
 mod formatting_helpers;
@@ -23,27 +24,45 @@ mod price_view_terminal;
 
 use config::Config;
 
-use price_provider::{PriceProvider};
+use price_provider::{PriceProvider, ConfigDetails};
 use price_provider_coingecko::{ProviderCoinGecko};
+use price_provider_coinmarketcap::{ProviderCoinMarketCap};
 use price_provider_cryptocompare::{ProviderCryptoCompare};
 use price_view_terminal::PriceViewTerminal;
 
 fn main() {
     let config = Config::load();
     
-    let provider: Box<dyn PriceProvider>;
+    let mut provider: Option<Box<dyn PriceProvider>> = None;
+    let mut config_details = ConfigDetails::new();
     // TODO: abstract this away somewhere so it's A: encapsuled, and B: re-useable?
     if config.data_provider == "coingecko" {
-        provider = Box::new(ProviderCoinGecko::new_from_config(&config));
+        if let Some((prov, config_dets)) = ProviderCoinGecko::new_from_config(&config) {
+            provider = Some(Box::new(prov));
+            config_details = config_dets;
+        }
+    }
+    else if config.data_provider == "coinmarketcap" {
+        if let Some((prov, config_dets)) = ProviderCoinMarketCap::new_from_config(&config) {
+            provider = Some(Box::new(prov));
+            config_details = config_dets;
+        }
     }
     else if config.data_provider == "cryptocompare" {
-        provider = Box::new(ProviderCryptoCompare::new_from_config(&config));
+        if let Some((prov, config_dets)) = ProviderCryptoCompare::new_from_config(&config) {
+            provider = Some(Box::new(prov));
+            config_details = config_dets;
+        }
     }
     else {
         eprintln!("Error: Unknown 'dataProvider' config item specified.");
         return;
     }
 
-    let mut price_view = PriceViewTerminal::new(&config, provider);
+    if provider.is_none() {
+        return;
+    }
+
+    let mut price_view = PriceViewTerminal::new(&config, config_details, provider.unwrap());
     price_view.run();
 }

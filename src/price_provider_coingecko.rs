@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::BTreeMap;
 
-use crate::{price_provider::{PriceProvider, CoinPriceItem}, config::Config};
+use crate::config::Config;
+
+use crate::price_provider::{PriceProvider, ConfigDetails, GetDataError, CoinPriceItem, Watermarks};
 
 // for results back from CoinGecko's API regarding the list of coins and their IDs
 //
@@ -66,14 +68,17 @@ pub struct ProviderCoinGecko {
 
 impl ProviderCoinGecko {
     // TODO: maybe this could be made generic with dyn and put somewhere shared to reduce duplication per-provider?
-    pub fn new_from_config(config: &Config) -> ProviderCoinGecko {
+    pub fn new_from_config(config: &Config) -> Option<(ProviderCoinGecko, ConfigDetails)> {
         let mut provider = ProviderCoinGecko { config: config.clone(), 
                             ids_wanted: Vec::with_capacity(0),
                             currency_val: String::new(), full_coin_list: Vec::with_capacity(0) };
         
-        provider.configure(config);
+        let config_details = provider.configure(config);
+        if config_details.is_none() {
+            return None;
+        }
 
-        return provider;
+        return Some((provider, config_details.unwrap()));
     }
 
     // This is public so other providers can use it in isolation
@@ -94,11 +99,11 @@ impl ProviderCoinGecko {
 }
 
 impl PriceProvider for ProviderCoinGecko {
-    fn configure(&mut self, config: &Config) -> bool {
+    fn configure(&mut self, config: &Config) -> Option<ConfigDetails> {
 
         let coin_list = ProviderCoinGecko::get_minimal_coin_list();
         if coin_list.is_none() {
-            return false;
+            return None;
         }
         self.full_coin_list = coin_list.unwrap();
 
@@ -107,6 +112,17 @@ impl PriceProvider for ProviderCoinGecko {
 
         let mut index = 0usize;
         for coin in &self.full_coin_list {
+            // filter out pegged values we don't want, due to symbol collisions..
+            // TODO: something smarter than this, but not sure how, given collisions...
+            
+            // filter item symbols are in lowercase...
+            if let Some(val) = self.config.coin_name_ignore_items.get(&coin.symbol.to_ascii_lowercase()) {
+                if coin.name.contains(val) {
+                    // skip this item
+                    index += 1;
+                    continue;
+                }
+            }
             lookup.insert(coin.symbol.to_ascii_uppercase(), index);
             index += 1;
         }
@@ -124,33 +140,37 @@ impl PriceProvider for ProviderCoinGecko {
             self.currency_val = "nzd".to_string();
         }
 
-        return true;
+        return Some(ConfigDetails::new());
     }
 
-    fn get_current_prices(& self) -> Vec<CoinPriceItem> {
+    fn get_current_prices(&self) -> Result<Vec<CoinPriceItem>, GetDataError> {
 
         if self.ids_wanted.is_empty() {
-            eprintln!("Error: no currency symbols configured/requested.");
-            return vec![];
+            return Err(GetDataError::ConfigError("No currency symbols configured/requested".to_string()));
         }
 
         let ids_param = self.ids_wanted.join(",");
 
         let request_url = format!("https://api.coingecko.com/api/v3/coins/markets?vs_currency={}&ids={}",
                                     self.currency_val, ids_param);
-
-        println!("Req: {}", request_url);
         
         let price_results = ureq::get(&request_url).call();
         if price_results.is_err() {
-            eprintln!("Error calling https://api.coingecko.com/api/v3/coins/markets {:?}", price_results.err());
-            return vec![];
+            return Err(GetDataError::CantConnect(format!("Error calling https://api.coingecko.com/api/v3/coins/markets: {:?}", price_results.err())));
         }
 
         // TODO: error handling!
         let coin_price_resp = price_results.unwrap().into_string().unwrap();
 
-        let coin_price_results: Vec<CoinMarketPriceItem> = serde_json::from_str(&coin_price_resp).unwrap();
+        let coin_price_results = serde_json::from_str::<Vec<CoinMarketPriceItem>>(&coin_price_resp);
+        if coin_price_results.is_err() {
+            return Err(GetDataError::ParseError(coin_price_results.err().unwrap().to_string()));
+        }
+        let coin_price_results = coin_price_results.unwrap();
+
+        if coin_price_results.is_empty() {
+            return Err(GetDataError::EmptyResults);
+        }
 
         let mut results = Vec::with_capacity(coin_price_results.len());
 
@@ -158,13 +178,14 @@ impl PriceProvider for ProviderCoinGecko {
 
             let new_val = CoinPriceItem{ symbol: src_res.symbol.to_ascii_uppercase(), name: src_res.name.clone(),
                                         current_price: src_res.current_price,
-                                        high_wm_24h: src_res.high_24h, low_wm_24h: src_res.low_24h,
+                                        watermarks_24h: Some(Watermarks::new(src_res.low_24h, src_res.high_24h)),
                                         price_change_24h: src_res.price_change_24h,
-                                        price_change_percentage_24h: src_res.price_change_percentage_24h };
+                                        percent_change_1h: None,
+                                        percent_change_24h: src_res.price_change_percentage_24h };
 
             results.push(new_val);
         }
 
-        return results;
+        return Ok(results);
     }
 }

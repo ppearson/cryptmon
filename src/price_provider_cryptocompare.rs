@@ -20,8 +20,13 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use crate::config::Config;
-use crate::price_provider::{PriceProvider, CoinPriceItem};
+use crate::price_provider::Watermarks;
+use crate::price_provider::{PriceProvider, ConfigDetails, GetDataError, CoinPriceItem};
 use crate::price_provider_coingecko;
+
+// Note: the https://min-api.cryptocompare.com/data/pricemultifull API seems to very often
+//       (but not always!!?) return incorrect (out of date?) price results (and other values, like min/max)
+//       but the values do update very regularly, so not really sure what's going on...
 
 #[derive(Serialize, Deserialize)]
 #[derive(Clone, Debug)]
@@ -92,15 +97,18 @@ pub struct ProviderCryptoCompare {
 
 impl ProviderCryptoCompare {
     // TODO: maybe this could be made generic with dyn and put somewhere shared to reduce duplication per-provider?
-    pub fn new_from_config(config: &Config) -> ProviderCryptoCompare {
+    pub fn new_from_config(config: &Config) -> Option<(ProviderCryptoCompare, ConfigDetails)> {
         let mut provider = ProviderCryptoCompare { config: config.clone(), 
                             symbols_wanted: Vec::with_capacity(0),
                             currency_val: String::new(),
                             name_lookup: BTreeMap::new() };
         
-        provider.configure(config);
+        let config_details = provider.configure(config);
+        if config_details.is_none() {
+            return None;
+        }
 
-        return provider;
+        return Some((provider, config_details.unwrap()));
     }
 
     // this one is a lot faster (minimal data), but uses another provider's API
@@ -161,7 +169,7 @@ impl ProviderCryptoCompare {
 }
 
 impl PriceProvider for ProviderCryptoCompare {
-    fn configure(&mut self, config: &Config) -> bool {
+    fn configure(&mut self, config: &Config) -> Option<ConfigDetails> {
 
         // for name lookup later...
         let mut wanted_coins = BTreeSet::new();
@@ -183,26 +191,22 @@ impl PriceProvider for ProviderCryptoCompare {
         // use the CoinGecko one as it's much faster...
         self.build_coin_name_lookup_coingecko(&wanted_coins);
 
-        return true;
+        return Some(ConfigDetails::new());
     }
 
-    fn get_current_prices(& self) -> Vec<CoinPriceItem> {
+    fn get_current_prices(&self) -> Result<Vec<CoinPriceItem>, GetDataError> {
         if self.symbols_wanted.is_empty() {
-            eprintln!("Error: no currency symbols configured/requested.");
-            return vec![];
+            return Err(GetDataError::ConfigError("No currency symbols configured/requested".to_string()));
         }
 
         let fsyms_param = self.symbols_wanted.join(",");
 
         let request_url = format!("https://min-api.cryptocompare.com/data/pricemultifull?fsyms={}&tsyms={}",
                                     fsyms_param, self.currency_val);
-
-//        println!("Req: {}", request_url);
         
         let price_results = ureq::get(&request_url).call();
         if price_results.is_err() {
-            eprintln!("Error calling https://min-api.cryptocompare.com/data/pricemultifull {:?}", price_results.err());
-            return vec![];
+            return Err(GetDataError::CantConnect(format!("Error calling https://min-api.cryptocompare.com/data/pricemultifull: {:?}", price_results.err())));
         }
 
         // TODO: error handling!
@@ -210,8 +214,7 @@ impl PriceProvider for ProviderCryptoCompare {
 
         let parsed_response = serde_json::from_str::<Value>(&coin_price_resp);
         if parsed_response.is_err() {
-            eprintln!("Error parsing json response from https://min-api.cryptocompare.com: {}", coin_price_resp);
-            return vec![];
+            return Err(GetDataError::ParseError(parsed_response.err().unwrap().to_string()));
         }
 
         let parsed_value_map = parsed_response.ok().unwrap();
@@ -247,10 +250,10 @@ impl PriceProvider for ProviderCryptoCompare {
 
                         let new_val = CoinPriceItem{ symbol: coin_symbol, name: coin_name,
                                         current_price: result_item.price,
-                                        high_wm_24h: result_item.high_24_hour,
-                                        low_wm_24h: result_item.low_24_hour,
+                                        watermarks_24h: Some(Watermarks::new(result_item.low_24_hour, result_item.high_24_hour)),
                                         price_change_24h: result_item.change_24_hour,
-                                        price_change_percentage_24h: result_item.change_pct_24_hour };
+                                        percent_change_1h: None,
+                                        percent_change_24h: result_item.change_pct_24_hour };
                         
                         results.push(new_val);
                     }
@@ -258,6 +261,6 @@ impl PriceProvider for ProviderCryptoCompare {
             }
         }
 
-        return results;
+        return Ok(results);
     }
 }
