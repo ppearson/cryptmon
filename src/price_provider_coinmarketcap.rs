@@ -17,9 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::BTreeMap;
 
-use crate::config::Config;
-
-use crate::price_provider::{PriceProvider, ConfigDetails, GetDataError, CoinPriceItem};
+use crate::price_provider::{PriceProvider, PriceProviderParams, ConfigDetails, GetDataError, CoinPriceItem};
 
 #[derive(Serialize, Deserialize)]
 #[derive(Clone, Debug)]
@@ -55,17 +53,17 @@ struct CoinMarketCapPriceQuoteConversion {
 }
 
 pub struct ProviderCoinMarketCap {
-    config:         Config,
+    params:         PriceProviderParams,
     api_key:        String,
 }
 
 impl ProviderCoinMarketCap {
     // TODO: maybe this could be made generic with dyn and put somewhere shared to reduce duplication per-provider?
-    pub fn new_from_config(config: &Config) -> Option<(ProviderCoinMarketCap, ConfigDetails)> {
-        let mut provider = ProviderCoinMarketCap { config: config.clone(), 
+    pub fn new_from_config(params: &PriceProviderParams) -> Option<(ProviderCoinMarketCap, ConfigDetails)> {
+        let mut provider = ProviderCoinMarketCap { params: params.clone(), 
                             api_key: String::new() };
         
-        let config_details = provider.configure(config);
+        let config_details = provider.configure(params);
         if config_details.is_none() {
             return None;
         }
@@ -75,7 +73,11 @@ impl ProviderCoinMarketCap {
 }
 
 impl PriceProvider for ProviderCoinMarketCap {
-    fn configure(&mut self, _config: &Config) -> Option<ConfigDetails> {
+    fn configure(&mut self, params: &PriceProviderParams) -> Option<ConfigDetails> {
+        // update this in a deferred way, so it can be updated lazily later, rather than
+        // just when being created...
+        self.params = params.clone();
+
         if let Some(api_key) = std::env::var_os("COINMARKETCAP_API_KEY") {
             if !api_key.is_empty() {
                 self.api_key = api_key.to_str().unwrap().to_string();
@@ -93,12 +95,12 @@ impl PriceProvider for ProviderCoinMarketCap {
 
     fn get_current_prices(&self) -> Result<Vec<CoinPriceItem>, GetDataError> {
 
-        if self.config.display_coins.is_empty() {
-            return Err(GetDataError::ConfigError("No currency symbols configured/requested".to_string()));
+        if self.params.wanted_coin_symbols.is_empty() {
+            return Err(GetDataError::ConfigError("No coin currency symbols configured/requested".to_string()));
         }
 
-        let symbol_param = self.config.display_coins.join(",");
-        let currency = self.config.display_currency.clone();
+        let symbol_param = self.params.wanted_coin_symbols.join(",");
+        let currency = self.params.fiat_currency.clone();
 
         let request_url = format!("https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?convert={}&symbol={}",
                                 currency, symbol_param);
@@ -126,9 +128,9 @@ impl PriceProvider for ProviderCoinMarketCap {
 
         let mut results = Vec::with_capacity(coin_price_results.data.len());
 
-        for coin_symbol in &self.config.display_coins {
+        for coin_symbol in &self.params.wanted_coin_symbols {
             if let Some(coin_item) = coin_price_results.data.get(&coin_symbol.to_ascii_uppercase()) {
-                if let Some(currency_item) = coin_item.quote.get(&self.config.display_currency.to_ascii_uppercase()) {
+                if let Some(currency_item) = coin_item.quote.get(&self.params.fiat_currency.to_ascii_uppercase()) {
 
                     let new_val = CoinPriceItem{ symbol: coin_item.symbol.to_ascii_uppercase(), name: coin_item.name.clone(),
                         current_price: currency_item.price,

@@ -15,7 +15,7 @@
 
 use crate::config::{Config, DisplayDataViewType};
 
-use crate::price_provider::{PriceProvider, ConfigDetails, CoinPriceItem};
+use crate::price_provider::{PriceProvider, PriceProviderParams, ConfigDetails, CoinPriceItem};
 
 use crate::cli_table_printer::{CLITablePrinter, Alignment};
 
@@ -31,6 +31,9 @@ pub struct PriceViewTerminal {
 
     config_details:     ConfigDetails,
 
+    // what was originally provided to the PriceProvider to configure it.... possibly with deferred modifications (i.e.)
+    // wanted_coin_symbols...
+    price_provider_params:  PriceProviderParams,
     price_provider:     Box<dyn PriceProvider>,
 
     table_headings:     Vec<String>,
@@ -39,9 +42,11 @@ pub struct PriceViewTerminal {
 }
 
 impl PriceViewTerminal {
-    pub fn new(config: &Config, config_details: ConfigDetails, price_provider: Box<dyn PriceProvider>) -> PriceViewTerminal {
+    pub fn new(config: &Config, config_details: ConfigDetails, price_provider_params: &PriceProviderParams,
+                                 price_provider: Box<dyn PriceProvider>) -> PriceViewTerminal {
         let price_view = PriceViewTerminal{ config: config.clone(),
                                             config_details,
+                                            price_provider_params: price_provider_params.clone(),
                                             price_provider,
                                             table_headings: Vec::with_capacity(3),
                                             table_def: CLITablePrinter::new(3) };
@@ -49,7 +54,14 @@ impl PriceViewTerminal {
     }
 
     pub fn run(&mut self) {
-        let price_heading = format!("Price ({})", self.config.display_currency.to_ascii_uppercase());
+
+        // lazily update the price provider with the symbols we want by reconfiguring it again...
+        // Not amazingly happy about this, but I'm less happy with alternatives in this chicken-and-egg situation...
+        self.price_provider_params.wanted_coin_symbols = self.config.display_config.wanted_coins.clone();
+        let mut_provider = &mut self.price_provider;
+        mut_provider.configure(&self.price_provider_params);
+
+        let price_heading = format!("Price ({})", self.config.display_config.fiat_currency.to_ascii_uppercase());
         self.table_headings = vec!["Sym".to_string(), "Name".to_string(), price_heading];
 
         // configure the master table def based off display/view settings...
@@ -57,7 +69,7 @@ impl PriceViewTerminal {
         self.table_def.set_alignment_multiple(&[2usize], Alignment::Right);
 
         // now other optional columns, depending on the display view type wanted
-        if self.config.display_data_view_type == DisplayDataViewType::MediumData {
+        if self.config.display_config.data_view_type == DisplayDataViewType::MediumData {
             if self.config_details.have_price_change_24h {
                 self.table_def.add_column_def("chng 24h", Alignment::Right);
             }
@@ -103,7 +115,7 @@ impl PriceViewTerminal {
                 println!("{}", local_table);
             }
 
-            std::thread::sleep(std::time::Duration::from_secs(self.config.display_update_period as u64));
+            std::thread::sleep(std::time::Duration::from_secs(self.config.display_config.update_period));
         }
     }
 
@@ -120,7 +132,7 @@ impl PriceViewTerminal {
         let mut row_strings: Vec<&str> = vec![&coin_details.symbol, &coin_details.name, &current_price];
 
         // now other optional columns, depending on the display view type wanted
-        if self.config.display_data_view_type == DisplayDataViewType::MediumData {
+        if self.config.display_config.data_view_type == DisplayDataViewType::MediumData {
             if self.config_details.have_price_change_24h {
                 change_24hr = smart_format(coin_details.price_change_24h);
                 row_strings.push(&change_24hr);

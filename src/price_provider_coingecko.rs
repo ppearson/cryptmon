@@ -17,9 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::BTreeMap;
 
-use crate::config::Config;
-
-use crate::price_provider::{PriceProvider, ConfigDetails, GetDataError, CoinPriceItem, Watermarks};
+use crate::price_provider::{PriceProvider, PriceProviderParams, ConfigDetails, GetDataError, CoinPriceItem, Watermarks};
 
 // for results back from CoinGecko's API regarding the list of coins and their IDs
 //
@@ -54,8 +52,7 @@ struct CoinMarketPriceItem {
 }
 
 pub struct ProviderCoinGecko {
-
-    config:         Config,
+    params:         PriceProviderParams,
 
     // list of actual id values to use for the request for prices of the 
     // coins that we actually want (i.e. a subset of the full list)
@@ -68,12 +65,12 @@ pub struct ProviderCoinGecko {
 
 impl ProviderCoinGecko {
     // TODO: maybe this could be made generic with dyn and put somewhere shared to reduce duplication per-provider?
-    pub fn new_from_config(config: &Config) -> Option<(ProviderCoinGecko, ConfigDetails)> {
-        let mut provider = ProviderCoinGecko { config: config.clone(), 
+    pub fn new_from_config(params: &PriceProviderParams) -> Option<(ProviderCoinGecko, ConfigDetails)> {
+        let mut provider = ProviderCoinGecko { params: params.clone(), 
                             ids_wanted: Vec::with_capacity(0),
                             currency_val: String::new(), full_coin_list: Vec::with_capacity(0) };
         
-        let config_details = provider.configure(config);
+        let config_details = provider.configure(params);
         if config_details.is_none() {
             return None;
         }
@@ -99,7 +96,10 @@ impl ProviderCoinGecko {
 }
 
 impl PriceProvider for ProviderCoinGecko {
-    fn configure(&mut self, config: &Config) -> Option<ConfigDetails> {
+    fn configure(&mut self, params: &PriceProviderParams) -> Option<ConfigDetails> {
+        // update this in a deferred way, so it can be updated lazily later, rather than
+        // just when being created...
+        self.params = params.clone();
 
         let coin_list = ProviderCoinGecko::get_minimal_coin_list();
         if coin_list.is_none() {
@@ -116,7 +116,7 @@ impl PriceProvider for ProviderCoinGecko {
             // TODO: something smarter than this, but not sure how, given collisions...
             
             // filter item symbols are in lowercase...
-            if let Some(val) = self.config.coin_name_ignore_items.get(&coin.symbol.to_ascii_lowercase()) {
+            if let Some(val) = self.params.coin_name_ignore_items.get(&coin.symbol.to_ascii_lowercase()) {
                 if coin.name.contains(val) {
                     // skip this item
                     index += 1;
@@ -127,16 +127,16 @@ impl PriceProvider for ProviderCoinGecko {
             index += 1;
         }
 
-        for coin in &self.config.display_coins {
+        for coin in &self.params.wanted_coin_symbols {
             if let Some(index) = lookup.get(&coin.to_ascii_uppercase()) {
                 let item = &self.full_coin_list[*index];
                 self.ids_wanted.push(item.id.clone());
             }
         }
 
-        self.currency_val = config.display_currency.to_ascii_lowercase();
+        self.currency_val = params.fiat_currency.to_ascii_lowercase();
         if self.currency_val.is_empty() {
-            eprintln!("Error: Currency value for CoinGecko provider was not specified. Using NZD instead...");
+            eprintln!("Error: Fiat Currency value for CoinGecko provider was not specified. Using NZD instead...");
             self.currency_val = "nzd".to_string();
         }
 

@@ -18,19 +18,33 @@ use std::io::{BufRead, BufReader};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfigSubType {
+    None,
+    Display,
+    Alerts
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DisplayDataViewType {
-    FullData,
+    PriceOnly,
     MediumData, // TODO: This needs a better name!...
-    PriceOnly
+    FullData,
 }
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub display_config:     DisplayConfig,
+
+    pub alert_config:       AlertConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct DisplayConfig {
     pub data_provider:          String,
     
-    pub display_currency:       String,
+    pub fiat_currency:          String,
 
-    pub display_coins:          Vec<String>,
+    pub wanted_coins:           Vec<String>,
 
     // key = lowercase symbol, val: string which if found means skip item
     pub coin_name_ignore_items: BTreeMap<String, String>,
@@ -38,24 +52,51 @@ pub struct Config {
     // this is in seconds.
     // Note: The actual config file can have human-readable units, and Config
     //       converts that to seconds when reading the file.
-    pub display_update_period:  u32,
+    pub update_period:          u64,
 
-    pub display_data_view_type: DisplayDataViewType,
+    pub data_view_type:         DisplayDataViewType,
+}
+
+#[derive(Clone, Debug)]
+pub struct AlertConfig {
+    // Note: for the moment duplicate, as we may want to split them in the future...
+    pub data_provider:          String,
+
+    pub fiat_currency:          String,
+
+    // key = lowercase symbol, val: string which if found means skip item
+    pub coin_name_ignore_items: BTreeMap<String, String>,
+
+    // time in seconds between each check of alert rules.
+    // Note: The actual config file can have human-readable units, and Config
+    //       converts that to seconds when reading the file.
+    pub check_period:           u64,
+
+    // for the moment, we'll do this, and defer actual processing of config strings
+    // to AlertItems for AlertService to handle, so that that module and this module aren't
+    // tightly-coupled together, although we may want to revisit this...
+    pub alert_config_strings:   Vec<String>,
 }
 
 impl Config {
     pub fn load() -> Config {
         // set defaults
-        let mut config = Config {data_provider: "cryptocompare".to_string(), display_currency: "nzd".to_string(),
-                             display_coins: Vec::with_capacity(0), coin_name_ignore_items: BTreeMap::new(),
-                             display_update_period: 120, display_data_view_type: DisplayDataViewType::MediumData };
+        let display_config = DisplayConfig {data_provider: "cryptocompare".to_string(), fiat_currency: "nzd".to_string(),
+                             wanted_coins: Vec::with_capacity(0), coin_name_ignore_items: BTreeMap::new(),
+                             update_period: 120, data_view_type: DisplayDataViewType::MediumData };
+        
+        let alert_config = AlertConfig {data_provider: "cryptocompare".to_string(), fiat_currency: "nzd".to_string(),
+                                    coin_name_ignore_items: BTreeMap::new(), check_period: 180,
+                                    alert_config_strings: Vec::with_capacity(0) };
+        
+        let mut config = Config { display_config, alert_config };
 
         if !config.load_config_file() {
             // we didn't find a config file, so add some currency symbols as the default so we at least load something by default...
-            config.display_coins.push("BTC".to_string());
-            config.display_coins.push("ETH".to_string());
-            config.display_coins.push("BTC".to_string());
-            config.display_coins.push("LTC".to_string());
+            config.display_config.wanted_coins.push("BTC".to_string());
+            config.display_config.wanted_coins.push("ETH".to_string());
+            config.display_config.wanted_coins.push("BTC".to_string());
+            config.display_config.wanted_coins.push("LTC".to_string());
         }
 
         return config;
@@ -116,44 +157,73 @@ impl Config {
                 continue;
             }
 
-            if let Some((item_key, item_val)) = get_key_value_parts(&line) {
+            if let Some((sub_type, item_key, item_val)) = get_key_value_parts(&line) {
                 if item_key == "coinNameIgnoreItems" {
+                    let mut temp_items: BTreeMap<String, String> = BTreeMap::new();
                     let pairs = item_val.split(',');
                     for pair in pairs {
                         if let Some((sym, ignore_string)) = pair.split_once('/') {
-                            self.coin_name_ignore_items.insert(sym.to_ascii_lowercase(), ignore_string.to_string());
+                            temp_items.insert(sym.to_ascii_lowercase(), ignore_string.to_string());
                         }
+                    }
+                    if sub_type == ConfigSubType::None || sub_type == ConfigSubType::Display {
+                        self.display_config.coin_name_ignore_items.append(&mut temp_items.clone());
+                    }
+                    if sub_type == ConfigSubType::None || sub_type == ConfigSubType::Alerts {
+                        self.alert_config.coin_name_ignore_items.append(&mut temp_items.clone());
                     }
                 }
                 else if item_key == "dataProvider" {
-                    self.data_provider = item_val.to_string();
-                }
-                else if item_key == "displayCoins" {
-                    let coin_symbols = item_val.split(',');
-                    for symbol in coin_symbols {
-                        self.display_coins.push(symbol.to_lowercase());
+                    if sub_type == ConfigSubType::None || sub_type == ConfigSubType::Display {
+                        self.display_config.data_provider = item_val.to_string();
+                    }
+                    if sub_type == ConfigSubType::None || sub_type == ConfigSubType::Alerts {
+                        self.alert_config.data_provider = item_val.to_string();
                     }
                 }
-                else if item_key == "displayCurrency" {
-                    self.display_currency = item_val.to_string();
+                else if sub_type == ConfigSubType::Display && item_key == "wantedCoins" {
+                    let coin_symbols = item_val.split(',');
+                    for symbol in coin_symbols {
+                        self.display_config.wanted_coins.push(symbol.to_lowercase());
+                    }
                 }
-                else if item_key == "displayDataViewType" {
+                else if item_key == "fiatCurrency" {
+                    if sub_type == ConfigSubType::None || sub_type == ConfigSubType::Display {
+                        self.display_config.fiat_currency = item_val.to_string();
+                    }
+                    if sub_type == ConfigSubType::None || sub_type == ConfigSubType::Alerts {
+                        self.alert_config.fiat_currency = item_val.to_string();
+                    }
+                }
+                else if sub_type == ConfigSubType::Display && item_key == "displayDataViewType" {
                     // TODO: error checking, although I hate that with match statements...
-                    self.display_data_view_type = match item_val {
+                    self.display_config.data_view_type = match item_val {
                         "priceOnly" => DisplayDataViewType::PriceOnly,
                         "medium" =>    DisplayDataViewType::MediumData,
                         "full" =>      DisplayDataViewType::FullData,
                         _      =>      DisplayDataViewType::MediumData,
                     }
                 }
-                else if item_key == "displayUpdatePeriod" {
+                else if sub_type == ConfigSubType::Display && item_key == "updatePeriod" {
                     if let Some(period_in_secs) = convert_time_period_string_to_seconds(item_val) {
-                        self.display_update_period = period_in_secs;
+                        self.display_config.update_period = period_in_secs;
                     }
                     else {
                         // TODO: currently convert_time_period_string_to_seconds() prints, but we probably
                         //       want to do it here, so that we can provide the name of the param item in the error...
                     }
+                }
+                else if sub_type == ConfigSubType::Alerts && item_key == "checkPeriod" {
+                    if let Some(period_in_secs) = convert_time_period_string_to_seconds(item_val) {
+                        self.alert_config.check_period = period_in_secs;
+                    }
+                    else {
+                        // TODO: currently convert_time_period_string_to_seconds() prints, but we probably
+                        //       want to do it here, so that we can provide the name of the param item in the error...
+                    }
+                }
+                else if sub_type == ConfigSubType::Alerts && item_key == "newAlert" {
+                    self.alert_config.alert_config_strings.push(item_val.to_string());
                 }
             }
             else {
@@ -165,22 +235,32 @@ impl Config {
     }
 }
 
-fn get_key_value_parts(str_val: &str) -> Option<(&str, &str)> {
-    if !str_val.contains(':') {
+fn get_key_value_parts(str_val: &str) -> Option<(ConfigSubType, &str, &str)> {
+    let split = str_val.split_once(':');
+    if split.is_none() {
         return None;
     }
-
-    let mut split = str_val.split(':');
-    let (key, val) = (split.next().unwrap(), split.next().unwrap());
+    let (mut key, val) = split.unwrap();
     if key.is_empty() || val.is_empty() {
         return None;
     }
 
-    return Some((key.trim(), val.trim()));
+    let mut ctype = ConfigSubType::None;
+    if let Some((left, right)) = key.split_once('.') {
+        if left == "display" {
+            ctype = ConfigSubType::Display;
+        }
+        else if left == "alerts" {
+            ctype = ConfigSubType::Alerts;
+        }
+        key = right;
+    }
+
+    return Some((ctype, key.trim(), val.trim()));
 }
 
 // TODO: better error handling and reporting, we might need context as well for reporting, so result would be better...
-fn convert_time_period_string_to_seconds(str_val: &str) -> Option<u32> {
+fn convert_time_period_string_to_seconds(str_val: &str) -> Option<u64> {
     // TODO: there's probably a better way of doing this...
     let mut local_value = str_val.to_string();
     let last_char = str_val.chars().last().unwrap();
@@ -197,7 +277,7 @@ fn convert_time_period_string_to_seconds(str_val: &str) -> Option<u32> {
     if !value_was_unitless {
         local_value.pop();
     }
-    let parse_result = local_value.parse::<u32>();
+    let parse_result = local_value.parse::<u64>();
     if parse_result.is_err() {
         eprintln!("Error parsing time period value from config.");
         return None;
@@ -207,3 +287,5 @@ fn convert_time_period_string_to_seconds(str_val: &str) -> Option<u32> {
 
     return Some(final_time_in_secs);
 }
+
+

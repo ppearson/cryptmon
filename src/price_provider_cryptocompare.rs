@@ -19,9 +19,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use crate::config::Config;
 use crate::price_provider::Watermarks;
-use crate::price_provider::{PriceProvider, ConfigDetails, GetDataError, CoinPriceItem};
+use crate::price_provider::{PriceProvider, PriceProviderParams, ConfigDetails, GetDataError, CoinPriceItem};
 use crate::price_provider_coingecko;
 
 // Note: the https://min-api.cryptocompare.com/data/pricemultifull API seems to very often
@@ -80,8 +79,7 @@ struct CoinDefItem {
 }
 
 pub struct ProviderCryptoCompare {
-
-    config:         Config,
+    params:         PriceProviderParams,
 
     symbols_wanted: Vec<String>,
     currency_val:   String,
@@ -97,13 +95,13 @@ pub struct ProviderCryptoCompare {
 
 impl ProviderCryptoCompare {
     // TODO: maybe this could be made generic with dyn and put somewhere shared to reduce duplication per-provider?
-    pub fn new_from_config(config: &Config) -> Option<(ProviderCryptoCompare, ConfigDetails)> {
-        let mut provider = ProviderCryptoCompare { config: config.clone(), 
+    pub fn new_from_config(params: &PriceProviderParams) -> Option<(ProviderCryptoCompare, ConfigDetails)> {
+        let mut provider = ProviderCryptoCompare { params: params.clone(), 
                             symbols_wanted: Vec::with_capacity(0),
                             currency_val: String::new(),
                             name_lookup: BTreeMap::new() };
         
-        let config_details = provider.configure(config);
+        let config_details = provider.configure(params);
         if config_details.is_none() {
             return None;
         }
@@ -129,7 +127,7 @@ impl ProviderCryptoCompare {
                     // TODO: something smarter than this, but not sure how, given collisions...
                     
                     // filter item symbols are in lowercase...
-                    if let Some(val) = self.config.coin_name_ignore_items.get(&coin.symbol) {
+                    if let Some(val) = self.params.coin_name_ignore_items.get(&coin.symbol) {
                         if coin.name.contains(val) {
                             // skip this item
                             continue;
@@ -169,12 +167,16 @@ impl ProviderCryptoCompare {
 }
 
 impl PriceProvider for ProviderCryptoCompare {
-    fn configure(&mut self, config: &Config) -> Option<ConfigDetails> {
+    fn configure(&mut self, params: &PriceProviderParams) -> Option<ConfigDetails> {
+
+        // update this in a deferred way, so it can be updated lazily later, rather than
+        // just when being created...
+        self.params = params.clone();
 
         // for name lookup later...
         let mut wanted_coins = BTreeSet::new();
         
-        for coin in &self.config.display_coins {
+        for coin in &self.params.wanted_coin_symbols {
             self.symbols_wanted.push(coin.to_ascii_lowercase());
 
             // Note: The coin list data currently has the symbols in uppercase,
@@ -182,7 +184,7 @@ impl PriceProvider for ProviderCryptoCompare {
             wanted_coins.insert(coin.to_ascii_uppercase());
         }
 
-        self.currency_val = config.display_currency.to_ascii_lowercase();
+        self.currency_val = params.fiat_currency.to_ascii_lowercase();
         if self.currency_val.is_empty() {
             eprintln!("Error: Currency value for CryptoCompare provider was not specified. Using NZD instead...");
             self.currency_val = "nzd".to_string();

@@ -14,6 +14,7 @@
 */
 
 mod config;
+mod alert_service;
 mod price_provider;
 mod price_provider_coingecko;
 mod price_provider_coinmarketcap;
@@ -22,34 +23,67 @@ mod cli_table_printer;
 mod formatting_helpers;
 mod price_view_terminal;
 
-use config::Config;
+use config::{Config};//, DisplayConfig, AlertConfig};
 
-use price_provider::{PriceProvider, ConfigDetails};
+use alert_service::{AlertService};
+use price_provider::{PriceProvider, ConfigDetails, PriceProviderParams};
 use price_provider_coingecko::{ProviderCoinGecko};
 use price_provider_coinmarketcap::{ProviderCoinMarketCap};
 use price_provider_cryptocompare::{ProviderCryptoCompare};
 use price_view_terminal::PriceViewTerminal;
 
+use std::env;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RunType {
+    View,
+    Alerts
+}
+
 fn main() {
+    let args: Vec<String> = env::args().collect();
+
     let config = Config::load();
     
     let mut provider: Option<Box<dyn PriceProvider>> = None;
     let mut config_details = ConfigDetails::new();
+
+    let mut run_type = RunType::View;
+
+    if args.len() > 1 {
+        let first_arg = &args[1];
+        if first_arg == "alerts" {
+            run_type = RunType::Alerts;
+        }
+    }
+
+    // TODO: this whole chicken-and-egg situation with PriceProvider/Config/PriceProviderParams is a mess...
+    //       I would really prefer to defer configuring things until later on (i.e. lazily configure as and when)
+    //       needed, but doing that in Rust seems quite painful and unidiomatic...
+    let data_provider = if run_type == RunType::View { &config.display_config.data_provider } else { &config.alert_config.data_provider };
+    let fiat_currency = if run_type == RunType::View { &config.display_config.fiat_currency } else { &config.alert_config.fiat_currency };
+    let coin_name_ignore_items = if run_type == RunType::View { &config.display_config.coin_name_ignore_items }
+                                                 else { &config.alert_config.coin_name_ignore_items };
+
+    let mut provider_params = PriceProviderParams::new();
+    provider_params.fiat_currency = fiat_currency.clone();
+    provider_params.coin_name_ignore_items = coin_name_ignore_items.clone();
+
     // TODO: abstract this away somewhere so it's A: encapsuled, and B: re-useable?
-    if config.data_provider == "coingecko" {
-        if let Some((prov, config_dets)) = ProviderCoinGecko::new_from_config(&config) {
+    if data_provider == "coingecko" {
+        if let Some((prov, config_dets)) = ProviderCoinGecko::new_from_config(&provider_params) {
             provider = Some(Box::new(prov));
             config_details = config_dets;
         }
     }
-    else if config.data_provider == "coinmarketcap" {
-        if let Some((prov, config_dets)) = ProviderCoinMarketCap::new_from_config(&config) {
+    else if data_provider == "coinmarketcap" {
+        if let Some((prov, config_dets)) = ProviderCoinMarketCap::new_from_config(&provider_params) {
             provider = Some(Box::new(prov));
             config_details = config_dets;
         }
     }
-    else if config.data_provider == "cryptocompare" {
-        if let Some((prov, config_dets)) = ProviderCryptoCompare::new_from_config(&config) {
+    else if data_provider == "cryptocompare" {
+        if let Some((prov, config_dets)) = ProviderCryptoCompare::new_from_config(&provider_params) {
             provider = Some(Box::new(prov));
             config_details = config_dets;
         }
@@ -60,9 +94,21 @@ fn main() {
     }
 
     if provider.is_none() {
+        eprintln!("Error: Couldn't create PriceProvider item.");
         return;
     }
 
-    let mut price_view = PriceViewTerminal::new(&config, config_details, provider.unwrap());
-    price_view.run();
+    if run_type == RunType::View {
+        let mut price_view = PriceViewTerminal::new(&config, config_details, &provider_params, provider.unwrap());
+        price_view.run();
+    }
+    else if run_type == RunType::Alerts {
+        let alert_service = AlertService::new(&config, &provider_params, provider.unwrap());
+        if let Some(mut service) = alert_service {
+            service.run();
+        }
+        else {
+            eprintln!("Error creating AlertService");
+        }
+    }    
 }

@@ -13,9 +13,24 @@
  ---------
 */
 
-use crate::config::{Config};
-
+use std::collections::BTreeMap;
 use std::fmt;
+
+#[derive(Clone, Debug)]
+pub struct PriceProviderParams {
+    pub fiat_currency:          String,
+    pub wanted_coin_symbols:    Vec<String>,
+
+    // key = lowercase symbol, val: string which if found means skip item
+    pub coin_name_ignore_items: BTreeMap<String, String>,
+}
+
+impl PriceProviderParams {
+    pub fn new() -> PriceProviderParams {
+        return PriceProviderParams { fiat_currency: String::new(), wanted_coin_symbols: Vec::with_capacity(0),
+                                     coin_name_ignore_items: BTreeMap::new() };
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ConfigDetails {
@@ -93,7 +108,7 @@ pub trait PriceProvider {
 
     // TODO: return something a bit better, maybe even a struct with a description
     //       of what data fields will be returned by the requests?
-    fn configure(&mut self, _config: &Config) -> Option<ConfigDetails> {
+    fn configure(&mut self, _params: &PriceProviderParams) -> Option<ConfigDetails> {
         return None;
     }
 
