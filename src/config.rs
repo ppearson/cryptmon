@@ -72,10 +72,42 @@ pub struct AlertConfig {
     //       converts that to seconds when reading the file.
     pub check_period:           u64,
 
+    // time in seconds to not alert again after an initial alert
+    pub sleep_period:           u64,
+
+    pub alert_provider_configs: BTreeMap<String, AlertProviderConfig>,
+
     // for the moment, we'll do this, and defer actual processing of config strings
     // to AlertItems for AlertService to handle, so that that module and this module aren't
-    // tightly-coupled together, although we may want to revisit this...
+    // completely tightly-coupled together, although we may want to revisit this...
+    // Note: this has already got a little messy, and the below only exist if the state
+    // wasn't extracted first for 'alert_provider_configs' above...
     pub alert_config_strings:   Vec<String>,
+}
+
+// I don't *really* like having this here, as it doesn't seem *completely* right, but I don't
+// really think there's any perfect place for it, and I think it makes sense to have it here
+// given there's specific Config logic which extracts the state for AlertProviders to use...
+#[derive(Clone, Debug)]
+pub struct AlertProviderConfig {
+    pub name:       String,
+    pub enabled:    bool,
+
+    pub params:     BTreeMap<String, String>,
+}
+
+impl AlertProviderConfig {
+    pub fn new(name: &str, enabled: bool) -> AlertProviderConfig {
+        return AlertProviderConfig { name: name.to_string(), enabled, params: BTreeMap::new() };
+    }
+
+    pub fn get_param_as_string(&self, name: &str) -> Option<String> {
+        if let Some(val) = self.params.get(name) {
+            return Some(val.to_string());
+        }
+
+        return None;
+    }
 }
 
 impl Config {
@@ -86,7 +118,9 @@ impl Config {
                              update_period: 120, data_view_type: DisplayDataViewType::MediumData };
         
         let alert_config = AlertConfig {data_provider: "cryptocompare".to_string(), fiat_currency: "nzd".to_string(),
-                                    coin_name_ignore_items: BTreeMap::new(), check_period: 180,
+                                    coin_name_ignore_items: BTreeMap::new(), check_period: 120,
+                                    sleep_period: convert_time_period_string_to_seconds("1h").unwrap(),
+                                    alert_provider_configs: BTreeMap::new(),
                                     alert_config_strings: Vec::with_capacity(0) };
         
         let mut config = Config { display_config, alert_config };
@@ -221,6 +255,44 @@ impl Config {
                         // TODO: currently convert_time_period_string_to_seconds() prints, but we probably
                         //       want to do it here, so that we can provide the name of the param item in the error...
                     }
+                }
+                else if sub_type == ConfigSubType::Alerts && item_key == "sleepPeriod" {
+                    if let Some(period_in_secs) = convert_time_period_string_to_seconds(item_val) {
+                        self.alert_config.sleep_period = period_in_secs;
+                    }
+                    else {
+                        // TODO: currently convert_time_period_string_to_seconds() prints, but we probably
+                        //       want to do it here, so that we can provide the name of the param item in the error...
+                    }
+                }
+                else if sub_type == ConfigSubType::Alerts && item_key.starts_with("provider.") {
+                    if let Some(definition_key) = item_key.strip_prefix("provider.") {
+                        if let Some(provider_name_end) = definition_key.find('.') {
+                            let provider_name = &definition_key[..provider_name_end];
+                            let param_name = &definition_key[provider_name_end + 1..];
+
+                            let mut prov_config = self.alert_config.alert_provider_configs.get_mut(provider_name);
+                            if prov_config.is_none() {
+                                // it doesn't exist yet, so create it in-place
+                                self.alert_config.alert_provider_configs.insert(provider_name.to_string(), AlertProviderConfig::new(provider_name, false));
+                                prov_config = self.alert_config.alert_provider_configs.get_mut(provider_name);
+                            }
+                            let prov_config = prov_config.unwrap();
+                            
+                            if param_name == "enabled" {
+                                prov_config.enabled = item_val == "true" || item_val == "1";
+                            }
+                            else {
+                                // it's a generic key/value param, so add it to the list
+                                prov_config.params.insert(param_name.to_string(), item_val.to_string());
+                            }
+
+                            // continue, so we skip over the error message as we've handled it
+                            continue;
+                        }
+                    }
+
+                    eprintln!("Error processing alert provider config: {} - {}", item_key, item_val);
                 }
                 else if sub_type == ConfigSubType::Alerts && item_key == "newAlert" {
                     self.alert_config.alert_config_strings.push(item_val.to_string());

@@ -11,3 +11,10 @@ serde = { version = "1.0.*", features = ["derive"] }
 serde_json = "1.0.*"
 termion = "1.5.6"
 chrono = "0.4"
+
+notifica = "3.0.2"
+
+# It seems the Lettre API changed quite a bit even during 0.9 releases, so lock things
+# down really tightly...
+lettre = "0.9.6"
+lettre_email = "0.9.4"

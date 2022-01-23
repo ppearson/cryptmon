@@ -18,7 +18,16 @@ use crate::config::{Config, AlertConfig};
 use crate::price_provider::{PriceProvider, PriceProviderParams, CoinPriceItem};
 use crate::formatting_helpers::{smart_format};
 
-use chrono::{Local};
+use crate::alert_provider::{AlertProvider, AlertMessageParams, SendAlertError};
+
+use crate::alert_provider_smtp_mail::{AlertProviderSMTPMail};
+use crate::alert_provider_textbelt::{AlertProviderTextbelt};
+
+use std::rc::Rc;
+
+use std::collections::BTreeMap;
+
+use chrono::{Local, Duration};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AlertTriggerType {
@@ -31,10 +40,12 @@ enum AlertTriggerType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum AlertAction {
     PrintMessage,
-    RunCommand(String)
+    ShowNotification,
+    RunCommand(String),
+    RunProvider(String),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone)]
 struct AlertItem {
     // note: these values are always lower-case here...
     pub coin_symbol:            String,
@@ -42,9 +53,12 @@ struct AlertItem {
     pub trigger_price:          f64,
 
     pub action:                 AlertAction,
+
+    // this is only set for alert action types that use providers
+    pub alert_provider: Option<Rc<dyn AlertProvider>>,
 }
 
-#[derive(Clone, Debug)]
+//#[derive(Clone, Debug)]
 struct InternalAlertState {
     pub main_alert: AlertItem,
 
@@ -67,6 +81,9 @@ pub struct AlertService {
     price_provider_params:  PriceProviderParams,
     price_provider:     Box<dyn PriceProvider>,
 
+    // TODO: not sure about this, but something like this needs to happen somewhere, so let's at least get the basics working...
+    alert_providers:    BTreeMap<String, Rc<dyn AlertProvider>>,
+
     alert_items:        Vec<InternalAlertState>,
 }
 
@@ -74,11 +91,16 @@ pub struct AlertService {
 impl AlertService {
     pub fn new(config: &Config, price_provider_params: &PriceProviderParams, price_provider: Box<dyn PriceProvider>) -> Option<AlertService> {
         let mut alert_service = AlertService{ config: config.clone(), price_provider_params: price_provider_params.clone(),
-                                          price_provider,
+                                          price_provider, alert_providers: BTreeMap::new(),
                                           alert_items: Vec::with_capacity(0) };
+        
+        // register and configure any enabled alert providers
+        // TODO: not sure about the best way of doing this...
+        alert_service.register_alert_provider("textbelt", &config.alert_config);
 
-        let alert_items = AlertService::process_alert_config_items(&config.alert_config);
+        let alert_items = alert_service.process_alert_config_items(&config.alert_config);
         if alert_items.is_none() {
+            eprintln!("Error: no alerts were found to be registered for coins to monitor in cryptmon.ini...");
             return None;
         }
 
@@ -102,7 +124,31 @@ impl AlertService {
         return Some(alert_service);
     }
 
-    fn process_alert_config_items(alert_config: &AlertConfig) -> Option<Vec<AlertItem>> {
+    fn register_alert_provider(&mut self, name: &str, config: &AlertConfig) -> bool {
+        // if we don't have a config for the name, we assume it's not enabled, so ignore it and
+        // don't register it...
+        if let Some(conf) = config.alert_provider_configs.get(name) {
+            // TODO: something less hard-coded than this...
+            if name == "textbelt" {
+                if let Some(provider) = AlertProviderTextbelt::new_configure(conf) {
+                    self.alert_providers.insert(name.to_string(), Rc::new(provider));
+                    return true;
+                }
+            }
+            else if name == "mailSMTP" {
+                if let Some(provider) = AlertProviderSMTPMail::new_configure(conf) {
+                    self.alert_providers.insert(name.to_string(), Rc::new(provider));
+                    return true;
+                }
+            }
+        }
+
+        eprintln!("Error: can't register or configure Alert provider: '{}'.", name);
+
+        return false;
+    }
+
+    fn process_alert_config_items(&mut self, alert_config: &AlertConfig) -> Option<Vec<AlertItem>> {
         let mut alert_items = Vec::new();
 
         for alert_conf in &alert_config.alert_config_strings {
@@ -139,19 +185,42 @@ impl AlertService {
             }
             let price_value = price_value.unwrap();
 
-            let alert_action = match params[3] {
-                "print"        => Some(AlertAction::PrintMessage),
-                "runCommand"   => Some(AlertAction::RunCommand("".to_string())),
-                _              => None,
-            };
+            let alert_action;
+            let alert_action_string = params[3];
+            if alert_action_string == "print" {
+                alert_action = Some(AlertAction::PrintMessage);
+            }
+            else if alert_action_string == "showNotification" {
+                alert_action = Some(AlertAction::ShowNotification);
+            }
+            else if alert_action_string.starts_with("runCommand") && alert_action_string.contains(':') {
+                // TODO: - split the string
+                alert_action = Some(AlertAction::RunCommand("".to_string()));
+            }
+            else {
+                // it's likely a generic alert provider...
+                alert_action = Some(AlertAction::RunProvider(alert_action_string.to_string()));
+            }
 
             if alert_action.is_none() {
                 continue;
             }
             let alert_action = alert_action.unwrap();
 
+            let mut alert_provider: Option<Rc<dyn AlertProvider>> = None;
+            if let AlertAction::RunProvider(provider_name) = &alert_action {
+                // it's a generic provider, so see if we have that registered (and configured)...
+                if let Some(provider) = self.alert_providers.get(provider_name) {
+                    alert_provider = Some(Rc::clone(provider));
+                }
+                else {
+                    eprintln!("Error: can't find registered and configured Alert Provider called '{}'", provider_name);
+                    continue;
+                }
+            }
+
             let new_alert = AlertItem{ coin_symbol: symbol.to_ascii_lowercase(), trigger_type: alert_trigger_type,
-                                       trigger_price: price_value, action: alert_action };
+                                       trigger_price: price_value, action: alert_action, alert_provider };
             alert_items.push(new_alert);
         }
 
@@ -181,7 +250,7 @@ impl AlertService {
                 let local_time = Local::now();
 
                 // brute-force it for now...
-                for alert in &self.alert_items {
+                for mut alert in &mut self.alert_items {
 
                     // check we should validate it
                     if alert.has_triggered && alert.sleep_until > local_time {
@@ -213,9 +282,47 @@ impl AlertService {
                     }
                     
                     if alert_triggered {
-                        // TODO:
-                        eprintln!("Alert hastriggered for {}, with price: {}", alert.main_alert.coin_symbol,
-                                    smart_format(current_price));
+                        let mut should_show_alert = true;
+
+//                        let cached_last_price = alert.last_price;
+
+                        // update the last price here, so it's done for all code paths...
+                        alert.last_price = current_price;
+
+                        if local_time < alert.sleep_until {
+                            // we're still sleeping, so don't...
+                            should_show_alert = false;
+                        }
+
+                        // TODO: watermark limits, etc...
+
+                        // TODO: think about what to do if multiple alerts trigger: combine the messages? Concat them?
+                        //       It's very likely we want to do something like this in the future for alerts where you might
+                        //       pay (i.e. SMS notifications), and wouldn't want duplicate messages for multiple coints at the
+                        //       same instant.
+
+                        if should_show_alert {
+                            alert.sleep_until = local_time;
+                            alert.sleep_until.checked_add_signed(Duration::seconds(self.config.alert_config.check_period as i64));
+
+                            let alert_message = format!("Coin: {} is at price: {}.", m_alert.coin_symbol.to_ascii_uppercase(),
+                                                         &smart_format(current_price));
+                            if m_alert.action == AlertAction::PrintMessage {
+                                eprintln!("{}", alert_message);
+                            }
+                            else if m_alert.action == AlertAction::ShowNotification {
+                                notifica::notify("Cryptmon Price Alert", &alert_message).unwrap();
+                            }
+                            else if let AlertAction::RunProvider(prov_name) = &m_alert.action {
+                                if let Some(provider) = &m_alert.alert_provider {
+                                    let alert_message = AlertMessageParams::new("Cryptmon Price Alert", &alert_message);
+                                    let res = provider.send_alert(alert_message);
+                                    if res.is_err() {
+                                        eprintln!("Error: Error sending alert with provider: '{}'", prov_name);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

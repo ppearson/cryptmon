@@ -14,14 +14,19 @@
 */
 
 mod config;
+mod alert_provider;
+mod alert_provider_smtp_mail;
+mod alert_provider_textbelt;
 mod alert_service;
+
 mod price_provider;
 mod price_provider_coingecko;
 mod price_provider_coinmarketcap;
 mod price_provider_cryptocompare;
 mod cli_table_printer;
-mod formatting_helpers;
 mod price_view_terminal;
+
+mod formatting_helpers;
 
 use config::{Config};//, DisplayConfig, AlertConfig};
 
