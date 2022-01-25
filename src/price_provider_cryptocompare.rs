@@ -101,12 +101,9 @@ impl ProviderCryptoCompare {
                             currency_val: String::new(),
                             name_lookup: BTreeMap::new() };
         
-        let config_details = provider.configure(params);
-        if config_details.is_none() {
-            return None;
-        }
+        let config_details = provider.configure(params)?;
 
-        return Some((provider, config_details.unwrap()));
+        return Some((provider, config_details));
     }
 
     // this one is a lot faster (minimal data), but uses another provider's API

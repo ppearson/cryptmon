@@ -70,12 +70,9 @@ impl ProviderCoinGecko {
                             ids_wanted: Vec::with_capacity(0),
                             currency_val: String::new(), full_coin_list: Vec::with_capacity(0) };
         
-        let config_details = provider.configure(params);
-        if config_details.is_none() {
-            return None;
-        }
+        let config_details = provider.configure(params)?;
 
-        return Some((provider, config_details.unwrap()));
+        return Some((provider, config_details));
     }
 
     // This is public so other providers can use it in isolation
@@ -101,11 +98,8 @@ impl PriceProvider for ProviderCoinGecko {
         // just when being created...
         self.params = params.clone();
 
-        let coin_list = ProviderCoinGecko::get_minimal_coin_list();
-        if coin_list.is_none() {
-            return None;
-        }
-        self.full_coin_list = coin_list.unwrap();
+        let coin_list = ProviderCoinGecko::get_minimal_coin_list()?;
+        self.full_coin_list = coin_list;
 
         // now work out the IDs of the coins we want, based off the symbol
         let mut lookup = BTreeMap::new();

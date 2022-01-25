@@ -72,8 +72,12 @@ pub struct AlertConfig {
     //       converts that to seconds when reading the file.
     pub check_period:           u64,
 
-    // time in seconds to not alert again after an initial alert
-    pub sleep_period:           u64,
+    // time in seconds to not alert again after an initial alert, per alert...
+    pub general_sleep_period:    u64,
+
+    // trip alert sleeps on a per-alert basis based off hight/low watermark values...
+    pub watermark_trip_sleep_enabled: bool,
+    pub watermark_trip_sleep_period: u64,
 
     pub alert_provider_configs: BTreeMap<String, AlertProviderConfig>,
 
@@ -119,7 +123,9 @@ impl Config {
         
         let alert_config = AlertConfig {data_provider: "cryptocompare".to_string(), fiat_currency: "nzd".to_string(),
                                     coin_name_ignore_items: BTreeMap::new(), check_period: 120,
-                                    sleep_period: convert_time_period_string_to_seconds("1h").unwrap(),
+                                    general_sleep_period: convert_time_period_string_to_seconds("1h").unwrap(),
+                                    watermark_trip_sleep_enabled: false,
+                                    watermark_trip_sleep_period: convert_time_period_string_to_seconds("6h").unwrap(),
                                     alert_provider_configs: BTreeMap::new(),
                                     alert_config_strings: Vec::with_capacity(0) };
         
@@ -191,6 +197,7 @@ impl Config {
                 continue;
             }
 
+            // TODO: we can likely condense quite a bit of this...
             if let Some((sub_type, item_key, item_val)) = get_key_value_parts(&line) {
                 if item_key == "coinNameIgnoreItems" {
                     let mut temp_items: BTreeMap<String, String> = BTreeMap::new();
@@ -256,9 +263,21 @@ impl Config {
                         //       want to do it here, so that we can provide the name of the param item in the error...
                     }
                 }
-                else if sub_type == ConfigSubType::Alerts && item_key == "sleepPeriod" {
+                else if sub_type == ConfigSubType::Alerts && item_key == "generalSleepPeriod" {
                     if let Some(period_in_secs) = convert_time_period_string_to_seconds(item_val) {
-                        self.alert_config.sleep_period = period_in_secs;
+                        self.alert_config.general_sleep_period = period_in_secs;
+                    }
+                    else {
+                        // TODO: currently convert_time_period_string_to_seconds() prints, but we probably
+                        //       want to do it here, so that we can provide the name of the param item in the error...
+                    }
+                }
+                else if sub_type == ConfigSubType::Alerts && item_key == "watermarkTripSleepEnabled" {
+                    self.alert_config.watermark_trip_sleep_enabled = item_val == "true" || item_val == "1";
+                }
+                else if sub_type == ConfigSubType::Alerts && item_key == "watermarkTripSleepPeriod" {
+                    if let Some(period_in_secs) = convert_time_period_string_to_seconds(item_val) {
+                        self.alert_config.watermark_trip_sleep_period = period_in_secs;
                     }
                     else {
                         // TODO: currently convert_time_period_string_to_seconds() prints, but we probably
@@ -308,11 +327,8 @@ impl Config {
 }
 
 fn get_key_value_parts(str_val: &str) -> Option<(ConfigSubType, &str, &str)> {
-    let split = str_val.split_once(':');
-    if split.is_none() {
-        return None;
-    }
-    let (mut key, val) = split.unwrap();
+    let split = str_val.split_once(':')?;
+    let (mut key, val) = split;
     if key.is_empty() || val.is_empty() {
         return None;
     }

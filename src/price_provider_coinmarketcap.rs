@@ -63,12 +63,9 @@ impl ProviderCoinMarketCap {
         let mut provider = ProviderCoinMarketCap { params: params.clone(), 
                             api_key: String::new() };
         
-        let config_details = provider.configure(params);
-        if config_details.is_none() {
-            return None;
-        }
+        let config_details = provider.configure(params)?;
 
-        return Some((provider, config_details.unwrap()));
+        return Some((provider, config_details));
     }
 }
 

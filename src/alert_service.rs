@@ -18,9 +18,13 @@ use crate::config::{Config, AlertConfig};
 use crate::price_provider::{PriceProvider, PriceProviderParams, CoinPriceItem};
 use crate::formatting_helpers::{smart_format};
 
-use crate::alert_provider::{AlertProvider, AlertMessageParams, SendAlertError};
+use crate::alert_provider::{AlertProvider, AlertMessageParams};//, SendAlertError};
 
+#[cfg(feature = "smtp")]
 use crate::alert_provider_smtp_mail::{AlertProviderSMTPMail};
+
+use crate::alert_provider_pushsafer::{AlertProviderPushSafer};
+use crate::alert_provider_simplepush::{AlertProviderSimplePush};
 use crate::alert_provider_textbelt::{AlertProviderTextbelt};
 
 use std::rc::Rc;
@@ -67,7 +71,9 @@ struct InternalAlertState {
 
     pub has_triggered:  bool,
 
-//    pub previous_alert_watermark: Option<f64>,
+    pub previous_alert_watermark: Option<f64>,
+    
+    pub watermark_trip_sleep_until: Option<chrono::DateTime<Local>>,
 
     pub sleep_until:    chrono::DateTime<Local>,
 }
@@ -96,7 +102,15 @@ impl AlertService {
         
         // register and configure any enabled alert providers
         // TODO: not sure about the best way of doing this...
+        alert_service.register_alert_provider("pushsafer", &config.alert_config);
+        alert_service.register_alert_provider("simplepush", &config.alert_config);
         alert_service.register_alert_provider("textbelt", &config.alert_config);
+
+        #[cfg(feature = "smtp")]
+        if !alert_service.register_alert_provider("mailSMTP", &config.alert_config) {
+            eprintln!("Error: Support for the 'mailSMTP' provider was not compiled into this binary.");
+            return None;
+        }
 
         let alert_items = alert_service.process_alert_config_items(&config.alert_config);
         if alert_items.is_none() {
@@ -110,6 +124,8 @@ impl AlertService {
             wanted_coins.push(alert_item.coin_symbol.to_ascii_lowercase());
             let internal_alert_state = InternalAlertState{ main_alert: alert_item, last_price: 0.0,
                                                            has_triggered: false,
+                                                           previous_alert_watermark: None,
+                                                           watermark_trip_sleep_until: None,
                                                            sleep_until: Local::now() };
 
             alert_service.alert_items.push(internal_alert_state);
@@ -129,13 +145,29 @@ impl AlertService {
         // don't register it...
         if let Some(conf) = config.alert_provider_configs.get(name) {
             // TODO: something less hard-coded than this...
-            if name == "textbelt" {
+            if name == "pushsafer" {
+                if let Some(provider) = AlertProviderPushSafer::new_configure(conf) {
+                    self.alert_providers.insert(name.to_string(), Rc::new(provider));
+                    return true;
+                }
+            }
+            else if name == "simplepush" {
+                if let Some(provider) = AlertProviderSimplePush::new_configure(conf) {
+                    self.alert_providers.insert(name.to_string(), Rc::new(provider));
+                    return true;
+                }
+            }
+            else if name == "textbelt" {
                 if let Some(provider) = AlertProviderTextbelt::new_configure(conf) {
                     self.alert_providers.insert(name.to_string(), Rc::new(provider));
                     return true;
                 }
             }
             else if name == "mailSMTP" {
+                #[cfg(not(feature = "smtp"))]
+                return false;
+
+                #[cfg(feature = "smtp")]
                 if let Some(provider) = AlertProviderSMTPMail::new_configure(conf) {
                     self.alert_providers.insert(name.to_string(), Rc::new(provider));
                     return true;
@@ -192,6 +224,9 @@ impl AlertService {
             }
             else if alert_action_string == "showNotification" {
                 alert_action = Some(AlertAction::ShowNotification);
+                
+                #[cfg(not(feature = "notifications"))]
+                eprintln!("Error: Notifications support is not compiled into this binary. Please enable the feature.");
             }
             else if alert_action_string.starts_with("runCommand") && alert_action_string.contains(':') {
                 // TODO: - split the string
@@ -243,83 +278,110 @@ impl AlertService {
 
             if let Err(err) = results {
                 eprintln!("Error getting price results: {}", err.to_string());
+
+                // TODO: maybe we don't want to wait as long first time, but want a backoff of some sort?
+                std::thread::sleep(std::time::Duration::from_secs(self.config.alert_config.check_period));
+
+                continue;
             }
-            else {
-                let prices = results.unwrap();
 
-                let local_time = Local::now();
+            let prices = results.unwrap();
 
-                // brute-force it for now...
-                for mut alert in &mut self.alert_items {
+            let local_time = Local::now();
 
-                    // check we should validate it
-                    if alert.has_triggered && alert.sleep_until > local_time {
-                        // skip it this time around, as we don't want alerts until the sleep_until time has expired
-                        continue;
-                    }
+            // brute-force it for now...
+            for mut alert in &mut self.alert_items {
 
-                    let current_price = get_price_for_symbol(&alert.main_alert.coin_symbol, &prices);
-                    if current_price.is_none() {
-                        eprintln!("Error: Price for symbol: {} was not found", alert.main_alert.coin_symbol);
-                    }
+                // check we should validate it
+                if alert.has_triggered && alert.sleep_until > local_time {
+                    // skip it this time around, as we don't want alerts until the general sleep_until time has expired
+                    continue;
+                }
 
-                    let current_price = current_price.unwrap();
+                let current_price = get_price_for_symbol(&alert.main_alert.coin_symbol, &prices);
+                if current_price.is_none() {
+                    eprintln!("Error: Price for symbol: {} was not found", alert.main_alert.coin_symbol);
+                    continue;
+                }
 
-                    // TODO: see if we can simplify/condense this - use match which defines a closure?...
-                    let mut alert_triggered = false;
-                    let m_alert = &alert.main_alert;
-                    if m_alert.trigger_type == AlertTriggerType::PriceGreaterThan && current_price > m_alert.trigger_price {
-                        alert_triggered = true;
-                    }
-                    else if m_alert.trigger_type == AlertTriggerType::PriceGreaterThanEqualTo && current_price >= m_alert.trigger_price {
-                        alert_triggered = true;
-                    }
-                    else if m_alert.trigger_type == AlertTriggerType::PriceLessThan && current_price < m_alert.trigger_price {
-                        alert_triggered = true;
-                    }
-                    else if m_alert.trigger_type == AlertTriggerType::PriceLessThanEqualTo && current_price <= m_alert.trigger_price {
-                        alert_triggered = true;
-                    }
-                    
-                    if alert_triggered {
-                        let mut should_show_alert = true;
+                let current_price = current_price.unwrap();
+
+                // TODO: see if we can simplify/condense this - use match which defines a closure?...
+                let m_alert = &alert.main_alert;
+                let alert_triggered = should_alert_trigger(m_alert.trigger_type, m_alert.trigger_price, current_price);
+                
+                if alert_triggered {
+                    let mut should_show_alert = true;
 
 //                        let cached_last_price = alert.last_price;
 
-                        // update the last price here, so it's done for all code paths...
-                        alert.last_price = current_price;
+                    // update the last price here, so it's done for all code paths...
+                    alert.last_price = current_price;
 
-                        if local_time < alert.sleep_until {
-                            // we're still sleeping, so don't...
-                            should_show_alert = false;
+                    // see if we should sleep due to general sleep...
+                    if local_time < alert.sleep_until {
+                        // we're still sleeping, so don't...
+                        should_show_alert = false;
+                    }
+
+                    // otherwise, see if we should check watermark trip sleep...
+                    if should_show_alert && self.config.alert_config.watermark_trip_sleep_enabled {
+                        if let Some(watermark_sleep_until) = alert.watermark_trip_sleep_until {
+                            if local_time < watermark_sleep_until {
+                                let prev_watermark_val = alert.previous_alert_watermark.unwrap();
+
+                                // in theory we're still sleeping for the watermark trip sleep for this
+                                // alert, but if the watermark for this alert has been tripped,
+                                // we can alert.
+                                // So basically, only set should_show_alert = false if we haven't tripped the
+                                // existing watermark
+
+                                let should_watermark_trigger = should_alert_trigger(m_alert.trigger_type, prev_watermark_val, current_price);
+                                should_show_alert = !should_watermark_trigger;
+                            }
+                            else {
+                                // otherwise, the watermark trip sleep has elapsed, and we want to "Action" the Alert...
+                            }
+                        }
+                    }
+
+                    // TODO: think about what to do if multiple alerts trigger: combine the messages? Concat them based
+                    //       of the providers? i.e. for all alerts which triggered sharing the same provider, combine them?
+                    //       It's very likely we want to do something like this in the future for alerts where you might
+                    //       pay (i.e. SMS notifications), and wouldn't want duplicate messages for multiple coins at the
+                    //       same instant. Or similarly, where free notification plans for push notifications / SMSs
+                    //       provide a limited number of free API calls per month.
+
+                    if should_show_alert {
+                        alert.sleep_until = local_time.checked_add_signed(Duration::seconds(self.config.alert_config.general_sleep_period as i64)).unwrap();
+
+                        if self.config.alert_config.watermark_trip_sleep_enabled {
+                            alert.previous_alert_watermark = Some(current_price);
+                            let watermark_sleep_until = local_time.checked_add_signed(Duration::seconds(self.config.alert_config.watermark_trip_sleep_period as i64)).unwrap();
+                            alert.watermark_trip_sleep_until = Some(watermark_sleep_until);
                         }
 
-                        // TODO: watermark limits, etc...
-
-                        // TODO: think about what to do if multiple alerts trigger: combine the messages? Concat them?
-                        //       It's very likely we want to do something like this in the future for alerts where you might
-                        //       pay (i.e. SMS notifications), and wouldn't want duplicate messages for multiple coints at the
-                        //       same instant.
-
-                        if should_show_alert {
-                            alert.sleep_until = local_time;
-                            alert.sleep_until.checked_add_signed(Duration::seconds(self.config.alert_config.check_period as i64));
-
-                            let alert_message = format!("Coin: {} is at price: {}.", m_alert.coin_symbol.to_ascii_uppercase(),
-                                                         &smart_format(current_price));
-                            if m_alert.action == AlertAction::PrintMessage {
-                                eprintln!("{}", alert_message);
-                            }
-                            else if m_alert.action == AlertAction::ShowNotification {
-                                notifica::notify("Cryptmon Price Alert", &alert_message).unwrap();
-                            }
-                            else if let AlertAction::RunProvider(prov_name) = &m_alert.action {
-                                if let Some(provider) = &m_alert.alert_provider {
-                                    let alert_message = AlertMessageParams::new("Cryptmon Price Alert", &alert_message);
-                                    let res = provider.send_alert(alert_message);
-                                    if res.is_err() {
-                                        eprintln!("Error: Error sending alert with provider: '{}'", prov_name);
-                                    }
+                        let alert_message = format!("Coin: {} is at price: {}.", m_alert.coin_symbol.to_ascii_uppercase(),
+                                                        &smart_format(current_price));
+                        if m_alert.action == AlertAction::PrintMessage {
+                            eprintln!("{}", alert_message);
+                        }
+                        else if m_alert.action == AlertAction::ShowNotification {
+                            #[cfg(feature = "notifications")]
+                            notifica::notify("Cryptmon Price Alert", &alert_message).unwrap();
+                        }
+                        else if let AlertAction::RunProvider(prov_name) = &m_alert.action {
+                            if let Some(provider) = &m_alert.alert_provider {
+                                let alert_message = AlertMessageParams::new("Cryptmon Price Alert", &alert_message);
+                                // TODO: maybe we want to try and do this asynchronously at some point, although it might
+                                //       just be easier to set a pretty short connection timeout as a config option,
+                                //       and providers can use that?
+                                let res = provider.send_alert(alert_message);
+                                if res.is_err() {
+                                    eprintln!("Error: Error sending alert with provider: '{}'", prov_name);
+                                    // TODO: If we weren't successful in sending the alert/notification with the provider,
+                                    // we probably want to assume it wasn't sent, and thus maybe not activate any sleep_until
+                                    // in this situation until we know we've managed to send an alert?
                                 }
                             }
                         }
@@ -330,6 +392,25 @@ impl AlertService {
             std::thread::sleep(std::time::Duration::from_secs(self.config.alert_config.check_period));
         }
     }
+}
+
+fn should_alert_trigger(trigger_type: AlertTriggerType, trigger_value: f64, actual_value: f64) -> bool {
+    let mut alert_triggered = false;
+
+    if trigger_type == AlertTriggerType::PriceGreaterThan && actual_value > trigger_value {
+        alert_triggered = true;
+    }
+    else if trigger_type == AlertTriggerType::PriceGreaterThanEqualTo && actual_value >= trigger_value {
+        alert_triggered = true;
+    }
+    else if trigger_type == AlertTriggerType::PriceLessThan && actual_value < trigger_value {
+        alert_triggered = true;
+    }
+    else if trigger_type == AlertTriggerType::PriceLessThanEqualTo && actual_value <= trigger_value {
+        alert_triggered = true;
+    }
+
+    return alert_triggered;
 }
 
 fn get_price_for_symbol(symbol: &str, prices: &[CoinPriceItem]) -> Option<f64> {

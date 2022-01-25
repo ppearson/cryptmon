@@ -21,7 +21,6 @@ use crate::alert_provider::{AlertProvider, SendAlertError, AlertMessageParams};
 //       the API is that stable, as some examples for 0.9.4 didn't seem to exist with 0.9.6, so...
 use lettre::smtp::authentication::Credentials;
 use lettre::{SmtpClient, Transport};
-use lettre_email;
 
 pub struct AlertProviderSMTPMail {
     pub to_address:     String,

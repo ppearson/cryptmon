@@ -15,7 +15,12 @@
 
 mod config;
 mod alert_provider;
+
+#[cfg(feature = "smtp")]
 mod alert_provider_smtp_mail;
+
+mod alert_provider_pushsafer;
+mod alert_provider_simplepush;
 mod alert_provider_textbelt;
 mod alert_service;
 
@@ -28,7 +33,7 @@ mod price_view_terminal;
 
 mod formatting_helpers;
 
-use config::{Config};//, DisplayConfig, AlertConfig};
+use config::{Config};
 
 use alert_service::{AlertService};
 use price_provider::{PriceProvider, ConfigDetails, PriceProviderParams};
