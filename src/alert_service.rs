@@ -336,8 +336,10 @@ impl AlertService {
                                 // So basically, only set should_show_alert = false if we haven't tripped the
                                 // existing watermark
 
-                                let should_watermark_trigger = should_alert_trigger(m_alert.trigger_type, prev_watermark_val, current_price);
-                                should_show_alert = !should_watermark_trigger;
+                                let should_watermark_trigger = should_alert_trigger_watermark(m_alert.trigger_type, prev_watermark_val, current_price);
+                                if !should_watermark_trigger {
+                                    should_show_alert = false;
+                                }
                             }
                             else {
                                 // otherwise, the watermark trip sleep has elapsed, and we want to "Action" the Alert...
@@ -410,6 +412,23 @@ fn should_alert_trigger(trigger_type: AlertTriggerType, trigger_value: f64, actu
         alert_triggered = true;
     }
 
+    return alert_triggered;
+}
+
+// this version is used for watermarks, and so maps >= to >, and <= to <, as it doesn't make sense
+// to trip the alerts on watermarks being equal to...
+fn should_alert_trigger_watermark(trigger_type: AlertTriggerType, watermark_value: f64, actual_value: f64) -> bool {
+    let mut alert_triggered = false;
+
+    if (trigger_type == AlertTriggerType::PriceGreaterThan || trigger_type == AlertTriggerType::PriceGreaterThanEqualTo)
+                                 && actual_value > watermark_value {
+        alert_triggered = true;
+    }
+    else if (trigger_type == AlertTriggerType::PriceLessThan || trigger_type == AlertTriggerType::PriceLessThanEqualTo)
+                                 && actual_value < watermark_value {
+        alert_triggered = true;
+    }
+    
     return alert_triggered;
 }
 
