@@ -72,8 +72,11 @@ pub struct AlertConfig {
     //       converts that to seconds when reading the file.
     pub check_period:           u64,
 
-    // time in seconds to not alert again after an initial alert, per alert...
-    pub general_sleep_period:    u64,
+    // time in seconds to not alert again after an initial alert, globally...
+    pub global_sleep_period:    u64,
+
+    // time in seconds to not alert again after an initial alert, on a per alert basis...
+    pub per_alert_sleep_period: u64,
 
     // trip alert sleeps on a per-alert basis based off hight/low watermark values...
     pub watermark_trip_sleep_enabled: bool,
@@ -123,7 +126,8 @@ impl Config {
         
         let alert_config = AlertConfig {data_provider: "cryptocompare".to_string(), fiat_currency: "nzd".to_string(),
                                     coin_name_ignore_items: BTreeMap::new(), check_period: 120,
-                                    general_sleep_period: convert_time_period_string_to_seconds("1h").unwrap(),
+                                    global_sleep_period: convert_time_period_string_to_seconds("1h").unwrap(),
+                                    per_alert_sleep_period: convert_time_period_string_to_seconds("2h").unwrap(),
                                     watermark_trip_sleep_enabled: false,
                                     watermark_trip_sleep_period: convert_time_period_string_to_seconds("6h").unwrap(),
                                     alert_provider_configs: BTreeMap::new(),
@@ -263,9 +267,18 @@ impl Config {
                         //       want to do it here, so that we can provide the name of the param item in the error...
                     }
                 }
-                else if sub_type == ConfigSubType::Alerts && item_key == "generalSleepPeriod" {
+                else if sub_type == ConfigSubType::Alerts && item_key == "globalSleepPeriod" {
                     if let Some(period_in_secs) = convert_time_period_string_to_seconds(item_val) {
-                        self.alert_config.general_sleep_period = period_in_secs;
+                        self.alert_config.global_sleep_period = period_in_secs;
+                    }
+                    else {
+                        // TODO: currently convert_time_period_string_to_seconds() prints, but we probably
+                        //       want to do it here, so that we can provide the name of the param item in the error...
+                    }
+                }
+                else if sub_type == ConfigSubType::Alerts && item_key == "perAlertSleepPeriod" {
+                    if let Some(period_in_secs) = convert_time_period_string_to_seconds(item_val) {
+                        self.alert_config.per_alert_sleep_period = period_in_secs;
                     }
                     else {
                         // TODO: currently convert_time_period_string_to_seconds() prints, but we probably

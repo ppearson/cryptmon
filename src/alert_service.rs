@@ -273,6 +273,10 @@ impl AlertService {
             return;
         }
 
+        let mut next_global_sleep = Local::now();
+
+        // TODO: do something about check period time-drift due to latency to checking results...
+
         loop {
             let results = self.price_provider.get_current_prices();
 
@@ -288,6 +292,22 @@ impl AlertService {
             let prices = results.unwrap();
 
             let local_time = Local::now();
+
+//            eprintln!("Time: {:?}", local_time);
+
+            // see if we should skip due to the global sleep...
+            // TODO: technically, we could skip even getting the prices for this duration, but I'm not
+            //       sure it's worth being that clever...
+            if self.config.alert_config.global_sleep_period > 0 {
+                if next_global_sleep > local_time {
+                    // skip it...
+                    std::thread::sleep(std::time::Duration::from_secs(self.config.alert_config.check_period));
+                    continue;
+                }
+
+                // otherwise...
+                next_global_sleep = local_time.checked_add_signed(Duration::seconds(self.config.alert_config.global_sleep_period as i64)).unwrap();
+            }
 
             // brute-force it for now...
             for mut alert in &mut self.alert_items {
@@ -355,7 +375,7 @@ impl AlertService {
                     //       provide a limited number of free API calls per month.
 
                     if should_show_alert {
-                        alert.sleep_until = local_time.checked_add_signed(Duration::seconds(self.config.alert_config.general_sleep_period as i64)).unwrap();
+                        alert.sleep_until = local_time.checked_add_signed(Duration::seconds(self.config.alert_config.per_alert_sleep_period as i64)).unwrap();
 
                         if self.config.alert_config.watermark_trip_sleep_enabled {
                             alert.previous_alert_watermark = Some(current_price);
