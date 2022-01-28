@@ -326,14 +326,11 @@ impl AlertService {
 
                 let current_price = current_price.unwrap();
 
-                // TODO: see if we can simplify/condense this - use match which defines a closure?...
                 let m_alert = &alert.main_alert;
                 let alert_triggered = should_alert_trigger(m_alert.trigger_type, m_alert.trigger_price, current_price);
                 
                 if alert_triggered {
                     let mut should_show_alert = true;
-
-//                        let cached_last_price = alert.last_price;
 
                     // update the last price here, so it's done for all code paths...
                     alert.last_price = current_price;
@@ -417,26 +414,18 @@ impl AlertService {
 }
 
 fn should_alert_trigger(trigger_type: AlertTriggerType, trigger_value: f64, actual_value: f64) -> bool {
-    let mut alert_triggered = false;
-
-    if trigger_type == AlertTriggerType::PriceGreaterThan && actual_value > trigger_value {
-        alert_triggered = true;
-    }
-    else if trigger_type == AlertTriggerType::PriceGreaterThanEqualTo && actual_value >= trigger_value {
-        alert_triggered = true;
-    }
-    else if trigger_type == AlertTriggerType::PriceLessThan && actual_value < trigger_value {
-        alert_triggered = true;
-    }
-    else if trigger_type == AlertTriggerType::PriceLessThanEqualTo && actual_value <= trigger_value {
-        alert_triggered = true;
-    }
+    let alert_triggered = 
+        (trigger_type == AlertTriggerType::PriceGreaterThan &&        actual_value >  trigger_value) ||
+        (trigger_type == AlertTriggerType::PriceGreaterThanEqualTo && actual_value >= trigger_value) ||
+        (trigger_type == AlertTriggerType::PriceLessThan &&           actual_value <  trigger_value) ||
+        (trigger_type == AlertTriggerType::PriceLessThanEqualTo &&    actual_value <= trigger_value);
 
     return alert_triggered;
 }
 
 // this version is used for watermarks, and so maps >= to >, and <= to <, as it doesn't make sense
-// to trip the alerts on watermarks being equal to...
+// to trip the alerts on watermarks being equal to the existing value...
+// TODO: we might also want to implement a percentage trip threshold here as well...
 fn should_alert_trigger_watermark(trigger_type: AlertTriggerType, watermark_value: f64, actual_value: f64) -> bool {
     let mut alert_triggered = false;
 

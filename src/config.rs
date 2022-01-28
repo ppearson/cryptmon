@@ -201,7 +201,9 @@ impl Config {
                 continue;
             }
 
-            // TODO: we can likely condense quite a bit of this...
+            // TODO: we can likely condense quite a bit of this, especially the things calling
+            //       'convert_time_period_string_to_seconds()'...
+            
             if let Some((sub_type, item_key, item_val)) = get_key_value_parts(&line) {
                 if item_key == "coinNameIgnoreItems" {
                     let mut temp_items: BTreeMap<String, String> = BTreeMap::new();

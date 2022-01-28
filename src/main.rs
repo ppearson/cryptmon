@@ -104,7 +104,7 @@ fn main() {
     }
 
     if provider.is_none() {
-        eprintln!("Error: Couldn't create PriceProvider item.");
+        eprintln!("Error: Couldn't create required PriceProvider item.");
         return;
     }
 
