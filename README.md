@@ -13,23 +13,25 @@ edges, and is very much designed with my limited use-cases in mind :)
 
 Currently supported **Price Providers** (price data sources):
 
-* CoinGecko
-* CryptoCompare (note: sometime provides wrong prices in non-USD fiat currencies)
-* CoinMarketCap (API key needed)
+* [CoinGecko](https://www.coingecko.com/)
+* [CryptoCompare](https://www.cryptocompare.com/) (note: sometime provides wrong prices in non-USD fiat currencies)
+* [CoinMarketCap](https://coinmarketcap.com/) (API key needed)
 
 Currently supported **Alert Providers**:
 
 * SMTP email sending (not compiled in by default - feature needs to be enabled in Cargo.toml or on the cargo command line for building)
-* TextBelt SMS sending (API key needed)
-* SimplePush phone notifications (API key and SimplePush App needed)
-* PushSafer phone notifications (API key and PushSafer App needed)
+* [Textbelt](https://textbelt.com/) SMS sending (API key needed)
+* [SimplePush](https://simplepush.io/) phone notifications (API key and SimplePush App needed)
+* [PushSafer](https://www.pushsafer.com/) phone notifications (API key and PushSafer App needed)
 
 in addition to built-in actions of `print`, which prints to the console, and `showNotification` which displays an OS alert.
 
 a `cryptmon.ini` config file is needed (you can copy the `example_cryptmon_config.ini` example one as starting point) for configuration in the:
+
     $HOME/cryptmon.ini
 
 or:
+
     $HOME/.config/cryptmon.ini
 
 file path locations.
