@@ -275,7 +275,7 @@ impl AlertService {
 
         let mut next_global_sleep = Local::now();
 
-        // TODO: do something about check period time-drift due to latency to checking results...
+        // TODO: do something about check period time-drift due to latency of getting price results...
 
         loop {
             let results = self.price_provider.get_current_prices();
@@ -283,7 +283,8 @@ impl AlertService {
             if let Err(err) = results {
                 eprintln!("Error getting price results: {}", err.to_string());
 
-                // TODO: maybe we don't want to wait as long first time, but want a backoff of some sort?
+                // TODO: maybe we don't want to wait as long first time, but want a backoff of some sort for repeated errors?
+                // TODO: and maybe even 'alerts'?
                 std::thread::sleep(std::time::Duration::from_secs(self.config.alert_config.check_period));
 
                 continue;
@@ -308,6 +309,9 @@ impl AlertService {
                 // otherwise...
                 next_global_sleep = local_time.checked_add_signed(Duration::seconds(self.config.alert_config.global_sleep_period as i64)).unwrap();
             }
+
+            // this is used for combining multiple alerts that might occur for the same provider if that config option is enabled.
+            let mut alert_provider_alerts: BTreeMap<String, String> = BTreeMap::new();
 
             // brute-force it for now...
             for mut alert in &mut self.alert_items {
@@ -391,6 +395,26 @@ impl AlertService {
                         }
                         else if let AlertAction::RunProvider(prov_name) = &m_alert.action {
                             if let Some(provider) = &m_alert.alert_provider {
+                                if self.config.alert_config.combine_multiple_alerts {
+                                    // if we need to attempt to combine multiple alerts to the same provider (we don't easily
+                                    // know ahead of time until this loop is done, although we could do a pre-pass), instead 
+                                    // of running send_alert() on the provider directly, cache the alert_message in the
+                                    // alert_provider_alerts BTreeMap<> above based off the provider name.
+
+                                    if let Some(existing_message) = alert_provider_alerts.get_mut(prov_name) {
+                                        // combine new alert message with existing string for this provider
+                                        let combined_message = format!("{}\n{}", existing_message, alert_message);
+                                        *existing_message = combined_message;
+                                    }
+                                    else {
+                                        // no existing alert for this provider, so just add it to the map
+                                        alert_provider_alerts.insert(prov_name.to_string(), alert_message);
+                                    }
+
+                                    // skip the rest of this loop, and the non-combining alert provider involking code below...
+                                    continue;
+                                }
+
                                 let alert_message = AlertMessageParams::new("Cryptmon Price Alert", &alert_message);
                                 // TODO: maybe we want to try and do this asynchronously at some point, although it might
                                 //       just be easier to set a pretty short connection timeout as a config option,
@@ -403,6 +427,28 @@ impl AlertService {
                                     // in this situation until we know we've managed to send an alert?
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // Now handle any provider alerts if we are in "combineMultipleAlerts" mode
+            // strictly-speaking, the first check should be redundant, but...
+            if self.config.alert_config.combine_multiple_alerts &&
+                !alert_provider_alerts.is_empty() {
+
+                for (provider_name, message) in alert_provider_alerts.into_iter() {
+                    if let Some(provider) = self.alert_providers.get(&provider_name) {
+                        let alert_message = AlertMessageParams::new("Cryptmon Price Alert", &message);
+                        // TODO: maybe we want to try and do this asynchronously at some point, although it might
+                        //       just be easier to set a pretty short connection timeout as a config option,
+                        //       and providers can use that?
+                        let res = provider.send_alert(alert_message);
+                        if res.is_err() {
+                            eprintln!("Error: Error sending alert with provider: '{}'", provider_name);
+                            // TODO: If we weren't successful in sending the alert/notification with the provider,
+                            // we probably want to assume it wasn't sent, and thus maybe not activate any sleep_until
+                            // in this situation until we know we've managed to send an alert?
                         }
                     }
                 }

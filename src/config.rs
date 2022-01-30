@@ -82,6 +82,10 @@ pub struct AlertConfig {
     pub watermark_trip_sleep_enabled: bool,
     pub watermark_trip_sleep_period: u64,
 
+    // if more than one alert triggers at one time, whether to attempt to combine them (depending
+    // if action and providers are the same)
+    pub combine_multiple_alerts:      bool,
+
     pub alert_provider_configs: BTreeMap<String, AlertProviderConfig>,
 
     // for the moment, we'll do this, and defer actual processing of config strings
@@ -120,16 +124,17 @@ impl AlertProviderConfig {
 impl Config {
     pub fn load() -> Config {
         // set defaults
-        let display_config = DisplayConfig {data_provider: "cryptocompare".to_string(), fiat_currency: "nzd".to_string(),
+        let display_config = DisplayConfig {data_provider: "coingecko".to_string(), fiat_currency: "nzd".to_string(),
                              wanted_coins: Vec::with_capacity(0), coin_name_ignore_items: BTreeMap::new(),
                              update_period: 120, data_view_type: DisplayDataViewType::MediumData };
         
-        let alert_config = AlertConfig {data_provider: "cryptocompare".to_string(), fiat_currency: "nzd".to_string(),
+        let alert_config = AlertConfig {data_provider: "coingecko".to_string(), fiat_currency: "nzd".to_string(),
                                     coin_name_ignore_items: BTreeMap::new(), check_period: 120,
                                     global_sleep_period: convert_time_period_string_to_seconds("1h").unwrap(),
                                     per_alert_sleep_period: convert_time_period_string_to_seconds("2h").unwrap(),
                                     watermark_trip_sleep_enabled: false,
                                     watermark_trip_sleep_period: convert_time_period_string_to_seconds("6h").unwrap(),
+                                    combine_multiple_alerts: true,
                                     alert_provider_configs: BTreeMap::new(),
                                     alert_config_strings: Vec::with_capacity(0) };
         
@@ -139,7 +144,7 @@ impl Config {
             // we didn't find a config file, so add some currency symbols as the default so we at least load something by default...
             config.display_config.wanted_coins.push("BTC".to_string());
             config.display_config.wanted_coins.push("ETH".to_string());
-            config.display_config.wanted_coins.push("BTC".to_string());
+            config.display_config.wanted_coins.push("SOL".to_string());
             config.display_config.wanted_coins.push("LTC".to_string());
         }
 
@@ -166,23 +171,21 @@ impl Config {
 
             if let Some(home_env_var) = std::env::var_os("HOME") {
                 if !home_env_var.is_empty() {
-                    let test_config_path = format!("{}/.config/cryptmon.ini", home_env_var.to_str().unwrap());
+
+                    // try just in $HOME/
+                    let test_config_path = format!("{}/cryptmon.ini", home_env_var.to_str().unwrap());
                     if std::path::Path::new(&test_config_path).exists() {
                         config_path = test_config_path;
-                    } 
+                    }
+                    else {
+                        // try in $HOME/.config/
+                        let test_config_path = format!("{}/.config/cryptmon.ini", home_env_var.to_str().unwrap());
+                        if std::path::Path::new(&test_config_path).exists() {
+                            config_path = test_config_path;
+                        } 
+                    }
                 }
             }
-        }
-
-        // if it's STILL empty, at least for the moment during dev, do this...
-        if config_path.is_empty() {
-            // for the moment...
-            #[cfg(target_os = "macos")]
-            let temp_config_path = "/Users/peter/cryptmon.ini";
-            #[cfg(target_os = "linux")]
-            let temp_config_path = "/home/peter/cryptmon.ini";
-
-            config_path = temp_config_path.to_string();
         }
 
         let file = std::fs::File::open(config_path);
@@ -203,7 +206,7 @@ impl Config {
 
             // TODO: we can likely condense quite a bit of this, especially the things calling
             //       'convert_time_period_string_to_seconds()'...
-            
+
             if let Some((sub_type, item_key, item_val)) = get_key_value_parts(&line) {
                 if item_key == "coinNameIgnoreItems" {
                     let mut temp_items: BTreeMap<String, String> = BTreeMap::new();
@@ -298,6 +301,9 @@ impl Config {
                         // TODO: currently convert_time_period_string_to_seconds() prints, but we probably
                         //       want to do it here, so that we can provide the name of the param item in the error...
                     }
+                }
+                else if sub_type == ConfigSubType::Alerts && item_key == "combineMultipleAlerts" {
+                    self.alert_config.combine_multiple_alerts = item_val == "true" || item_val == "1";
                 }
                 else if sub_type == ConfigSubType::Alerts && item_key.starts_with("provider.") {
                     if let Some(definition_key) = item_key.strip_prefix("provider.") {
