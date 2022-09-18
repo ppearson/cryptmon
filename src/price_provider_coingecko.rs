@@ -76,19 +76,36 @@ impl ProviderCoinGecko {
     }
 
     // This is public so other providers can use it in isolation
-    // TODO: Use Result for error handling...
-    pub fn get_minimal_coin_list() -> Option<Vec<CoinListResultItem>> {
-        let coin_list_request = ureq::get(&"https://api.coingecko.com/api/v3/coins/list".to_string());
-        let coin_list_resp = coin_list_request.call();        
-        if coin_list_resp.is_err() {
-            eprintln!("Error calling https://api.coingecko.com/api/v3/coins/list {:?}", coin_list_resp.err());
-            return None;
+    pub fn get_minimal_coin_list() -> Result<Vec<CoinListResultItem>, GetDataError> {
+        let coin_list_request = ureq::get("https://api.coingecko.com/api/v3/coins/list");
+        let coin_list_resp = coin_list_request.call();
+        if let Err(err) = &coin_list_resp {
+            match err {
+                ureq::Error::Status(code, _response) => {
+                    return Err(GetDataError::ErrorResponse(format!("Error response {} when calling https://api.coingecko.com/api/v3/coins/list: {}", code, err)));
+                },
+                ureq::Error::Transport(_transport) => {
+                    let transport_error = err.kind();
+                    match transport_error {
+                        ureq::ErrorKind::Dns => {
+                            return Err(GetDataError::CantConnect(format!("DNS Error calling https://api.coingecko.com/api/v3/coins/list: {}", err)));
+                        },
+                        ureq::ErrorKind::ConnectionFailed => {
+                            return Err(GetDataError::CantConnect(format!("Connection Error calling https://api.coingecko.com/api/v3/coins/list: {}", err)));
+                        },
+                        _ => {
+                            return Err(GetDataError::TransportError(format!("Error calling https://api.coingecko.com/api/v3/coins/list: {}", err)));
+                        }
+                    };
+                }
+            }
+            
         }
 
         let coin_list_resp = coin_list_resp.unwrap().into_string().unwrap();
 
         let full_coin_list: Vec<CoinListResultItem> = serde_json::from_str(&coin_list_resp).unwrap();
-        return Some(full_coin_list);
+        return Ok(full_coin_list);
     }
 }
 
@@ -98,8 +115,23 @@ impl PriceProvider for ProviderCoinGecko {
         // just when being created...
         self.params = params.clone();
 
-        let coin_list = ProviderCoinGecko::get_minimal_coin_list()?;
-        self.full_coin_list = coin_list;
+        let coin_list = ProviderCoinGecko::get_minimal_coin_list();
+        if let Err(err) = coin_list {
+            match err {
+                GetDataError::CantConnect(full_error) => {
+                    eprintln!("Error: Couldn't connect to coingecko.com to obtain coin list from API. Connection Error: {}", full_error);
+                },
+                GetDataError::ErrorResponse(full_error) => {
+                    eprintln!("Error: An error response was received from coingecko.com when trying to obtain coin list from API. Full error: {}", full_error);
+                }
+                _ => {
+                    eprintln!("Error: An error occurred when trying to obtain coin list from API.");
+                }
+            }
+            
+            return None;
+        }
+         self.full_coin_list = coin_list.unwrap();
 
         // now work out the IDs of the coins we want, based off the symbol
         let mut lookup = BTreeMap::new();
@@ -138,7 +170,6 @@ impl PriceProvider for ProviderCoinGecko {
     }
 
     fn get_current_prices(&self) -> Result<Vec<CoinPriceItem>, GetDataError> {
-
         if self.ids_wanted.is_empty() {
             return Err(GetDataError::ConfigError("No currency symbols configured/requested".to_string()));
         }

@@ -97,7 +97,7 @@ impl PriceViewTerminal {
             print!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1));
 
             if let Err(err) = results {
-                eprintln!("Error getting price results: {}", err.to_string());
+                eprintln!("Error getting price results: {}", err);
             }
             else {
                 let prices = results.unwrap();

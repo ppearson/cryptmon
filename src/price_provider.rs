@@ -83,7 +83,9 @@ impl Watermarks {
 pub enum GetDataError {
     ConfigError(String),
     CantConnect(String),
+    TransportError(String),
     NoResponse(String),
+    ErrorResponse(String),
     InvalidAPIParams(String),
     ParseError(String),
     EmptyResults,
@@ -95,7 +97,9 @@ impl fmt::Display for GetDataError {
         match *self {
             GetDataError::ConfigError(ref err) => write!(f, "Configuration Error: {}", err),
             GetDataError::CantConnect(ref err) => write!(f, "Can't Connect: {}", err),
+            GetDataError::TransportError(ref err) => write!(f, "HTTP Transport error: {}", err),
             GetDataError::NoResponse(ref err) => write!(f, "No Response from API server: {}", err),
+            GetDataError::ErrorResponse(ref err) => write!(f, "Error Response from API server: {}", err),
             GetDataError::InvalidAPIParams(ref err) => write!(f, "Invalid API params provided: {}", err),
             GetDataError::ParseError(ref err) => write!(f, "Error parsing response: {}", err),
             GetDataError::EmptyResults => write!(f, "Empty results"),

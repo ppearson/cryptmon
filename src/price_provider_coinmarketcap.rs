@@ -91,7 +91,6 @@ impl PriceProvider for ProviderCoinMarketCap {
     }
 
     fn get_current_prices(&self) -> Result<Vec<CoinPriceItem>, GetDataError> {
-
         if self.params.wanted_coin_symbols.is_empty() {
             return Err(GetDataError::ConfigError("No coin currency symbols configured/requested".to_string()));
         }

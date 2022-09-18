@@ -8,7 +8,7 @@ Made partly as a custom tool to scratch an itch, but also as a new project with 
 language, as well as various HTTP/Web APIs for access to Crypto prices and alert/notification providers, and also to learn a bit more
 about Crypto exchanges and price tracking.
 
-It's still very much in the experimental/WIP/development phase, but is functional to a fair degree, although it still has some rough
+It's still in the developmental phase (although not a high priority for me), but is functional to a fair degree, although it still has some rough
 edges, and is very much designed with my limited use-cases in mind :)
 
 Currently supported **Price Providers** (price data sources):

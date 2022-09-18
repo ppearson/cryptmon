@@ -99,12 +99,12 @@ fn main() {
         }
     }
     else {
-        eprintln!("Error: Unknown 'dataProvider' config item specified.");
+        eprintln!("Error: Unknown 'dataProvider' config item specified: {}. Please make sure it is one of the supported price providers.", data_provider);
         return;
     }
 
     if provider.is_none() {
-        eprintln!("Error: Couldn't create required PriceProvider item.");
+        eprintln!("Error: Couldn't create required PriceProvider item to obtain coin currency values with. cryptmon will exit.");
         return;
     }
 

@@ -108,9 +108,9 @@ impl ProviderCryptoCompare {
 
     // this one is a lot faster (minimal data), but uses another provider's API
     // Note: wanted_coins is uppercase for the symbols.
-    fn build_coin_name_lookup_coingecko(&mut self, wanted_coins: &BTreeSet<String>) {
+    fn build_coin_name_lookup_coingecko(&mut self, wanted_coins: &BTreeSet<String>) -> bool {
         let coin_list = price_provider_coingecko::ProviderCoinGecko::get_minimal_coin_list();
-        if let Some(coins) = coin_list {
+        if let Ok(coins) = coin_list {
             for coin in coins {
                 // the coin list symbols from CoinGecko are in lowercase...
                 let uppercase_symbol = coin.symbol.to_uppercase();
@@ -134,18 +134,25 @@ impl ProviderCryptoCompare {
                     self.name_lookup.insert(uppercase_symbol, coin.name.clone());
                 }
             }
+
+            return true;
+        }
+        else {
+            eprintln!("Error: Couldn't retrieve minimal coin list lookup from CoinGecko provider. Full error: {}", coin_list.err().unwrap());
+
+            return false;
         }
     }
 
     // this one uses our provider's API, but is very slow as it returns huge amounts of data
     // Note: wanted_coins is uppercase for the symbols.
     #[allow(dead_code)]
-    fn build_coin_name_lookup_cryptocompare(&mut self, wanted_coins: &BTreeSet<String>) {
-        let coin_list_request = ureq::get(&"https://min-api.cryptocompare.com/data/all/coinlist".to_string());
+    fn build_coin_name_lookup_cryptocompare(&mut self, wanted_coins: &BTreeSet<String>) -> bool {
+        let coin_list_request = ureq::get("https://min-api.cryptocompare.com/data/all/coinlist");
         let coin_list_resp = coin_list_request.call();        
         if coin_list_resp.is_err() {
             eprintln!("Error calling https://min-api.cryptocompare.com/data/all/coinlist {:?}", coin_list_resp.err());
-            return;
+            return false;
         }
 
         let coin_list_resp = coin_list_resp.unwrap().into_string().unwrap();
@@ -160,6 +167,8 @@ impl ProviderCryptoCompare {
                 self.name_lookup.insert(coin_item.1.symbol.clone(), coin_item.1.coin_name.clone());
             } 
         }
+
+        return true;
     }
 }
 
@@ -223,7 +232,6 @@ impl PriceProvider for ProviderCryptoCompare {
         // TODO: the below is pretty disgusting, but I couldn't get nested BTreeMap items
         //       to work as expected with Serde with structs, so I'm doing it manually, as
         //       that at least works.
-
         // check it's an array object and other stuff (i.e. check the json is expected)
         if parsed_value_map.is_object() {
             let value_as_object = parsed_value_map.as_object().unwrap();
@@ -244,8 +252,10 @@ impl PriceProvider for ProviderCryptoCompare {
 
                         let coin_symbol = result_item.from_symbol.to_ascii_uppercase();
 
-//                            let coin_name = "".to_string();
-                        let coin_name = self.name_lookup.get(&coin_symbol).unwrap().clone();
+                        let coin_name = match self.name_lookup.get(&coin_symbol) {
+                            Some(name) => name.clone(),
+                            _ =>          "Unknown".to_string()
+                        };
 
                         let new_val = CoinPriceItem{ symbol: coin_symbol, name: coin_name,
                                         current_price: result_item.price,

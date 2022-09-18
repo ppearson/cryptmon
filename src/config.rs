@@ -375,13 +375,12 @@ fn convert_time_period_string_to_seconds(str_val: &str) -> Option<u64> {
     let last_char = str_val.chars().last().unwrap();
     let value_was_unitless = !last_char.is_alphabetic();
     
-    let mult_to_seconds;
-    match last_char {
-        's' => { mult_to_seconds = 1; }
-        'm' => { mult_to_seconds = 60; }
-        'h' => { mult_to_seconds = 60 * 60; }
-        _   => { mult_to_seconds = 60;  }
-    }
+    let mult_to_seconds = match last_char {
+        's' => { 1 }
+        'm' => { 60 }
+        'h' => { 60 * 60 }
+        _   => { 60 }
+    };
 
     if !value_was_unitless {
         local_value.pop();

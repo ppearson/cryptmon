@@ -1,6 +1,6 @@
 [package]
 name = "cryptmon"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -10,8 +10,11 @@ ureq = { version = "2.2.*", features = ["json", "charset"] }
 serde = { version = "1.0.*", features = ["derive"] }
 serde_json = "1.0.*"
 termion = "1.5.6"
-chrono = "0.4"
 
+# This specification of custom features is somewhat useless, as ureq ends up (silently - cargo tree doesn't show it) brings in wasm stuff via ring
+chrono = { version = "0.4.22", features = ["clock", "std"] }
+
+# Note: this needs libdbus-dev package support on Linux...
 notifica = { version = "3.0.2", optional = true }
 
 # It seems the Lettre API changed quite a bit even during 0.9 releases, so lock things
@@ -24,4 +27,5 @@ lettre_email = { version = "0.9.4", optional = true }
 #default = ["smtp"]
 default = ["notifications"]
 smtp = ["lettre", "lettre_email"]
+
 notifications = ["notifica"]

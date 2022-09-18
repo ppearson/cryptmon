@@ -281,7 +281,7 @@ impl AlertService {
             let results = self.price_provider.get_current_prices();
 
             if let Err(err) = results {
-                eprintln!("Error getting price results: {}", err.to_string());
+                eprintln!("Error getting price results: {}", err);
 
                 // TODO: maybe we don't want to wait as long first time, but want a backoff of some sort for repeated errors?
                 // TODO: and maybe even 'alerts'?
@@ -393,7 +393,7 @@ impl AlertService {
                             #[cfg(feature = "notifications")]
                             notifica::notify("Cryptmon Price Alert", &alert_message).unwrap();
                         }
-                        else if let AlertAction::RunProvider(prov_name) = &m_alert.action {
+                        else if let AlertAction::RunProvider(provider_name) = &m_alert.action {
                             if let Some(provider) = &m_alert.alert_provider {
                                 if self.config.alert_config.combine_multiple_alerts {
                                     // if we need to attempt to combine multiple alerts to the same provider (we don't easily
@@ -401,14 +401,14 @@ impl AlertService {
                                     // of running send_alert() on the provider directly, cache the alert_message in the
                                     // alert_provider_alerts BTreeMap<> above based off the provider name.
 
-                                    if let Some(existing_message) = alert_provider_alerts.get_mut(prov_name) {
+                                    if let Some(existing_message) = alert_provider_alerts.get_mut(provider_name) {
                                         // combine new alert message with existing string for this provider
                                         let combined_message = format!("{}\n{}", existing_message, alert_message);
                                         *existing_message = combined_message;
                                     }
                                     else {
                                         // no existing alert for this provider, so just add it to the map
-                                        alert_provider_alerts.insert(prov_name.to_string(), alert_message);
+                                        alert_provider_alerts.insert(provider_name.to_string(), alert_message);
                                     }
 
                                     // skip the rest of this loop, and the non-combining alert provider involking code below...
@@ -420,8 +420,8 @@ impl AlertService {
                                 //       just be easier to set a pretty short connection timeout as a config option,
                                 //       and providers can use that?
                                 let res = provider.send_alert(alert_message);
-                                if res.is_err() {
-                                    eprintln!("Error: Error sending alert with provider: '{}'", prov_name);
+                                if let Err(err) = res {
+                                    eprintln!("Error: Error sending alert with provider: '{}'. Full error: {}", provider_name, err);
                                     // TODO: If we weren't successful in sending the alert/notification with the provider,
                                     // we probably want to assume it wasn't sent, and thus maybe not activate any sleep_until
                                     // in this situation until we know we've managed to send an alert?
@@ -444,8 +444,8 @@ impl AlertService {
                         //       just be easier to set a pretty short connection timeout as a config option,
                         //       and providers can use that?
                         let res = provider.send_alert(alert_message);
-                        if res.is_err() {
-                            eprintln!("Error: Error sending alert with provider: '{}'", provider_name);
+                        if let Err(err) = res {
+                            eprintln!("Error: Error sending alert with provider: '{}'. Full error: {}", provider_name, err);
                             // TODO: If we weren't successful in sending the alert/notification with the provider,
                             // we probably want to assume it wasn't sent, and thus maybe not activate any sleep_until
                             // in this situation until we know we've managed to send an alert?
